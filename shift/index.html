@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SHIFT · 重力转向</title>
+<style>
+  :root{--bg:#0b0e17;--panel:#121726;--line:#262d45;--ink:#e7ebf5;--dim:#8b93ad;--acc:#ffd166;--ok:#5fd38d}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;overflow:hidden;touch-action:none}
+  .app{height:100dvh;display:flex;flex-direction:column;align-items:center;padding:10px;gap:10px}
+  header{width:min(100%,620px);display:flex;align-items:center;gap:10px}
+  header h1{margin:0;font-size:18px;letter-spacing:.18em}
+  header h1 b{color:var(--acc)}
+  .lv{margin-left:auto;display:flex;gap:6px}
+  .lv button{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--dim);cursor:pointer;font-weight:600}
+  .lv button.on{border-color:var(--acc);color:var(--acc)}
+  .lv button.done{color:var(--ok)}
+  .hud{width:min(100%,620px);display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;color:var(--dim)}
+  .hud .name{color:var(--ink);font-weight:600;font-size:15px}
+  .goal{display:flex;align-items:center;gap:6px}
+  .bar{width:90px;height:8px;border-radius:4px;background:#1d2338;overflow:hidden}
+  .bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+  .bar i.ok{background:var(--ok)}
+  .stage{flex:1;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;position:relative}
+  #wrap{position:relative}
+  #cv{display:block;image-rendering:pixelated;border-radius:6px;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+  #cv.tilt{transition:transform .28s cubic-bezier(.3,.7,.3,1)}
+  .hint{width:min(100%,620px);color:var(--dim);min-height:1.5em;text-align:center}
+  .ctrl{display:flex;gap:10px;padding-bottom:env(safe-area-inset-bottom)}
+  .ctrl button{min-width:64px;height:48px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--ink);font-size:20px;cursor:pointer}
+  .ctrl button:active{background:#1c2338}
+  .ctrl .small{font-size:14px;min-width:54px;color:var(--dim)}
+  .overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(8,10,18,.72);backdrop-filter:blur(3px);border-radius:6px}
+  .overlay.show{display:flex}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 22px;text-align:center;min-width:220px}
+  .card h2{margin:0 0 4px;font-size:20px}
+  .stars{font-size:28px;color:var(--acc);letter-spacing:4px;margin:6px 0}
+  .card button{margin-top:10px;padding:8px 16px;border-radius:10px;border:none;background:var(--acc);color:#1a1405;font-weight:700;font-size:15px;cursor:pointer}
+  kbd{font:12px ui-monospace,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1><b>SHIFT</b> 重力转向</h1>
+    <div class="lv" id="lvBtns"></div>
+  </header>
+  <div class="hud">
+    <span class="name" id="lvName"></span>
+    <span id="moves"></span>
+    <span id="goals" style="display:flex;gap:12px"></span>
+  </div>
+  <div class="stage" id="stage">
+    <div id="wrap">
+      <canvas id="cv"></canvas>
+      <div class="overlay" id="win"><div class="card">
+        <h2 id="winTitle">过关！</h2>
+        <div class="stars" id="winStars"></div>
+        <div id="winText" style="color:var(--dim)"></div>
+        <button id="nextBtn">下一关</button>
+      </div></div>
+    </div>
+  </div>
+  <div class="hint" id="hint"></div>
+  <div class="ctrl">
+    <button id="ccw" title="逆时针转（← / A / Q）">⟲</button>
+    <button id="flip" title="翻转 180°（↑ / W）">⇅</button>
+    <button id="cw" title="顺时针转（→ / D / E）">⟳</button>
+    <button id="reset" class="small" title="重来（R）">重来</button>
+  </div>
+</div>
+<script>
+
+'use strict';
+/* =====================================================================
+ * 1. 配置 & 元素定义
+ * ===================================================================== */
+const S = 160, W = S, H = S;               // 网格尺寸（固定，保证同日场景一致）
+const N = W * H;
+
+const E = { EMPTY:0, SAND:1, WATER:2, STONE:3, WOOD:4, PLANT:5, FIRE:6, SMOKE:7, STEAM:8, OIL:9, LAVA:10, ICE:11, GLASS:12 };
+const KIND = { STATIC:0, POWDER:1, LIQUID:2, GAS:3, FIRE:4, NONE:5 };
+
+// name, color, kind, density, flammability(0..1 per tick), key, paint fill ratio
+const DEF = [];
+function def(id, o){ DEF[id] = o; }
+def(E.EMPTY, {name:'橡皮', color:'#000000', kind:KIND.NONE,   dens:0,  flam:0,    key:'0', fill:1});
+def(E.SAND,  {name:'沙子', color:'#e2b867', kind:KIND.POWDER, dens:7,  flam:0,    key:'1', fill:.55, vary:18});
+def(E.WATER, {name:'水',   color:'#3a7bd5', kind:KIND.LIQUID, dens:4,  flam:0,    key:'2', fill:.6,  vary:8, disp:5});
+def(E.STONE, {name:'石头', color:'#6b7385', kind:KIND.STATIC, dens:99, flam:0,    key:'3', fill:1,   vary:14});
+def(E.WOOD,  {name:'木头', color:'#7a4a24', kind:KIND.STATIC, dens:99, flam:.012, key:'4', fill:1,   vary:12, burn:[90,150]});
+def(E.PLANT, {name:'植物', color:'#3fae4a', kind:KIND.STATIC, dens:99, flam:.08,  key:'5', fill:.8,  vary:22, burn:[18,36]});
+def(E.FIRE,  {name:'火',   color:'#ff7a1a', kind:KIND.FIRE,   dens:1,  flam:0,    key:'6', fill:.5});
+def(E.OIL,   {name:'油',   color:'#5b4630', kind:KIND.LIQUID, dens:3,  flam:.25,  key:'7', fill:.6,  vary:8, disp:3, burn:[25,50]});
+def(E.LAVA,  {name:'熔岩', color:'#ff5a14', kind:KIND.LIQUID, dens:6,  flam:0,    key:'8', fill:.6,  vary:30, disp:1});
+def(E.ICE,   {name:'冰',   color:'#a8dcf0', kind:KIND.STATIC, dens:99, flam:0,    key:'9', fill:1,   vary:10});
+def(E.STEAM, {name:'蒸汽', color:'#c9d6e3', kind:KIND.GAS,    dens:1,  flam:0,    key:'',  fill:.4,  vary:14});
+def(E.SMOKE, {name:'烟',   color:'#4b4f58', kind:KIND.GAS,    dens:1,  flam:0,    key:'',  fill:.4,  vary:10});
+def(E.GLASS, {name:'玻璃', color:'#bfe3e6', kind:KIND.STATIC, dens:99, flam:0,    key:'',  fill:1,   vary:6});
+const PALETTE_ORDER = [E.EMPTY,E.SAND,E.WATER,E.STONE,E.WOOD,E.PLANT,E.FIRE,E.OIL,E.LAVA,E.ICE,E.STEAM,E.SMOKE,E.GLASS];
+
+// 快速查表（typed arrays）
+const T_KIND = new Uint8Array(16), T_DENS = new Uint8Array(16), T_FLAM = new Float32Array(16), T_MOVABLE = new Uint8Array(16);
+DEF.forEach((d,i)=>{ T_KIND[i]=d.kind; T_DENS[i]=d.dens; T_FLAM[i]=d.flam; T_MOVABLE[i]= (d.kind!==KIND.STATIC && d.kind!==KIND.FIRE) ? 1 : 0; });
+// 刚性固体：必须（经由相连的固体）连到画面边缘才能停在原地；边缘视为连着画面外看不见的固体
+const T_SOLID = new Uint8Array(16), T_BUOY = new Uint8Array(16);
+[E.STONE,E.WOOD,E.PLANT,E.ICE,E.GLASS].forEach(t=>T_SOLID[t]=1);
+[E.WOOD,E.PLANT,E.ICE].forEach(t=>T_BUOY[t]=1);   // 全由这些组成的固体块浮在水上
+
+/* ---------- 网格状态 ---------- */
+const type  = new Uint8Array(N);   // 元素类型
+const life  = new Uint8Array(N);   // 寿命 / 生长预算
+const shade = new Uint8Array(N);   // 颜色抖动
+const stamp = new Uint8Array(N);   // 本帧已移动标记
+let frameId = 1;
+
+/* =====================================================================
+ * 3. 模拟步进
+ * ===================================================================== */
+const rnd = Math.random;
+function newCell(i, t){
+  if (T_SOLID[t] || T_SOLID[type[i]]) solidDirty = true;
+  type[i]=t; shade[i]=(rnd()*256)|0; stamp[i]=frameId;
+  switch(t){
+    case E.FIRE:  life[i]=20+((rnd()*30)|0); break;
+    case E.SMOKE: life[i]=30+((rnd()*60)|0); break;
+    case E.STEAM: life[i]=70+((rnd()*120)|0); break;
+    case E.PLANT: life[i]=6; break;
+    case E.ICE:   life[i]=2; break;
+    default: life[i]=0;
+  }
+}
+function ignite(i){
+  const d=DEF[type[i]], b=d.burn||[20,40];
+  if (T_SOLID[type[i]]) solidDirty = true;
+  type[i]=E.FIRE; life[i]=b[0]+((rnd()*(b[1]-b[0]))|0); stamp[i]=frameId;
+}
+function swap(i,j){
+  const t=type[i], l=life[i], s=shade[i];
+  type[i]=type[j]; life[i]=life[j]; shade[i]=shade[j];
+  type[j]=t; life[j]=l; shade[j]=s;
+  stamp[j]=frameId; stamp[i]=frameId;
+}
+const NB_DX=[-1,0,1,-1,1,-1,0,1], NB_DY=[-1,-1,-1,0,0,1,1,1];
+// 随机取一个 8 邻居索引，越界返回 -1
+function randNb(x,y){
+  const r=(rnd()*8)|0, nx=x+NB_DX[r], ny=y+NB_DY[r];
+  return (nx<0||ny<0||nx>=W||ny>=H) ? -1 : ny*W+nx;
+}
+// t 能否沉入 j（j 可移动且更轻）
+function sinks(t,j){ const u=type[j]; return T_MOVABLE[u]===1 && T_DENS[u]<T_DENS[t]; }
+
+function stepPowder(i,x,y,t){
+  if (y>=H-1) return;
+  const b=i+W;
+  if (sinks(t,b)){ if (type[b]===E.EMPTY || rnd()<.5) swap(i,b); return; }
+  let d=rnd()<.5?-1:1;
+  for (let k=0;k<2;k++,d=-d){
+    const nx=x+d; if (nx<0||nx>=W) continue;
+    if (sinks(t,b+d) && sinks(t,i+d)){ swap(i,b+d); return; }
+  }
+}
+function stepLiquid(i,x,y,t,disp){
+  if (y<H-1){
+    const b=i+W;
+    if (sinks(t,b)){ swap(i,b); return; }
+    let d=rnd()<.5?-1:1;
+    for (let k=0;k<2;k++,d=-d){
+      const nx=x+d; if (nx<0||nx>=W) continue;
+      if (sinks(t,b+d) && sinks(t,i+d)){ swap(i,b+d); return; }
+    }
+  }
+  // 水平扩散
+  let d=rnd()<.5?-1:1;
+  for (let k=0;k<2;k++,d=-d){
+    let last=-1;
+    for (let s=1;s<=disp;s++){
+      const nx=x+d*s; if (nx<0||nx>=W) break;
+      const j=i+d*s; if (!sinks(t,j)) break;
+      last=j;
+      if (y<H-1 && sinks(t,j+W)) break;   // 遇到可下落的位置就停
+    }
+    if (last>=0){ swap(i,last); return; }
+  }
+}
+function stepGas(i,x,y,t){
+  if (life[i]>0) life[i]--;
+  if (life[i]===0 || (y===0 && rnd()<.02)){
+    // 蒸汽寿命结束时有概率冷凝为水（降雨）
+    if (t===E.STEAM && rnd()<(y<6?.6:.25)) newCell(i,E.WATER); else { type[i]=E.EMPTY; life[i]=0; }
+    return;
+  }
+  if (rnd()<.15) return; // 轻微停顿，让气体更飘
+  if (y>0){
+    const u=i-W;
+    if (type[u]===E.EMPTY){ swap(i,u); return; }
+    const d=rnd()<.5?-1:1, nx=x+d;
+    if (nx>=0&&nx<W && type[u+d]===E.EMPTY){ swap(i,u+d); return; }
+  }
+  const d=rnd()<.5?-1:1, nx=x+d;
+  if (nx>=0&&nx<W && type[i+d]===E.EMPTY) swap(i,i+d);
+}
+function stepFire(i,x,y){
+  let fuel=false;
+  for (let k=0;k<8;k++){            // 火焰检查全部 8 邻居（火格子少，开销可控）
+    const nx=x+NB_DX[k], ny=y+NB_DY[k];
+    if (nx<0||ny<0||nx>=W||ny>=H) continue;
+    const j=ny*W+nx, u=type[j];
+    if (u===E.WATER){ newCell(i,E.STEAM); if (rnd()<.4) newCell(j,E.STEAM); return; }
+    if (u===E.ICE){ if (rnd()<.1) newCell(j,E.WATER); }
+    else if (T_FLAM[u]>0){ fuel=true; if (rnd()<T_FLAM[u]*2.5) ignite(j); }
+  }
+  if (fuel && life[i]<20) life[i]++;      // 贴着燃料时火焰不急于熄灭
+  if (life[i]>0) life[i]--;
+  if (life[i]===0){ if (rnd()<.35) newCell(i,E.SMOKE); else { type[i]=E.EMPTY; } return; }
+  if (y>0){
+    const up=i-W;
+    if (type[up]===E.EMPTY){
+      if (rnd()<.03) newCell(up,E.SMOKE);
+      else if (!fuel && life[i]<40 && rnd()<.35){ swap(i,up); return; }
+    }
+  }
+  if (!fuel && y<H-1 && type[i+W]===E.EMPTY && life[i]<40 && rnd()<.1) swap(i,i+W); // 脱离燃料的火星会坠落一点
+}
+function stepLava(i,x,y){
+  const j=randNb(x,y);
+  if (j>=0){
+    const u=type[j];
+    if (u===E.WATER){ newCell(j,E.STEAM); if (rnd()<.35){ newCell(i,E.STONE); return; } }
+    else if (u===E.ICE){ newCell(j,E.WATER); }
+    else if (T_FLAM[u]>0 && rnd()<.3) ignite(j);
+    else if (u===E.SAND && rnd()<.004) newCell(j,E.GLASS);
+    else if (u===E.EMPTY && j<i-W+2 && rnd()<.002) newCell(j, rnd()<.5?E.FIRE:E.SMOKE);
+  }
+  if (rnd()<.45) stepLiquid(i,x,y,E.LAVA,1);
+}
+function stepPlant(i,x,y){
+  if (life[i]===0 || rnd()>.03) return;
+  const j=randNb(x,y);
+  if (j>=0 && type[j]===E.WATER){ type[j]=E.PLANT; solidDirty=true; life[j]=life[i]-1; shade[j]=(rnd()*256)|0; stamp[j]=frameId; life[i]--; }
+}
+function stepIce(i,x,y){
+  const j=randNb(x,y); if (j<0) return;
+  const u=type[j];
+  if ((u===E.FIRE||u===E.LAVA) && rnd()<.25){ newCell(i,E.WATER); return; }
+  if (u===E.STEAM && rnd()<.05){ newCell(i,E.WATER); return; }
+  if (u===E.WATER && life[i]>0 && rnd()<.01){ type[j]=E.ICE; solidDirty=true; life[j]=life[i]-1; shade[j]=(rnd()*256)|0; stamp[j]=frameId; }
+}
+
+/* ---------- 固体支撑：悬空的固体块整体下落 ----------
+ * 从四条边上的固体出发做 8 邻接泛洪，被连到的固体算"有支撑"。
+ * 其余固体按连通块分组，每步整体下移 1 格：
+ *   - 下方是空气、气体、火、液体 → 把它们挤到块的上方（物质守恒）
+ *   - 下方是别的固体或粉末（沙子）→ 落地停住
+ *   - 全由木头/植物/冰组成的块碰到水也停住（浮在水面）
+ */
+const supMark = new Uint32Array(N), compId = new Int32Array(N);
+const sQueue = new Int32Array(N), compCells = new Int32Array(N);
+let supGen = 0, compSerial = 0;
+let solidDirty = true;      // 有固体被创建/销毁/移动后置位，才需要重新计算支撑
+let comps = [];             // 上次计算出的悬空块 [start, end, maxIndex, id, buoyant]
+function settleSolids(){
+  if (solidDirty){ findLooseSolids(); solidDirty = false; }
+  if (!comps.length) return false;
+  const moved = dropLooseSolids();
+  if (moved) solidDirty = true;
+  return moved;
+}
+function findLooseSolids(){
+  if (++supGen > 0xFFFFFFF0){ supMark.fill(0); supGen = 1; }
+  const g = supGen;
+  let qh = 0, qt = 0;
+  const seed = i => { if (T_SOLID[type[i]] && supMark[i] !== g){ supMark[i] = g; sQueue[qt++] = i; } };
+  for (let x = 0; x < W; x++){ seed(x); seed((H-1)*W + x); }
+  for (let y = 1; y < H-1; y++){ seed(y*W); seed(y*W + W-1); }
+  const flood = () => {
+    while (qh < qt){
+      const i = sQueue[qh++], x = i % W, y = (i / W) | 0;
+      for (let k = 0; k < 8; k++){
+        const nx = x + NB_DX[k], ny = y + NB_DY[k];
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const j = ny*W + nx;
+        if (supMark[j] !== g && T_SOLID[type[j]]){ supMark[j] = g; sQueue[qt++] = j; }
+      }
+    }
+  };
+  flood();
+  // 收集没有支撑的连通块
+  comps = [];
+  let cn = 0;
+  for (let i = N-1; i >= 0; i--){
+    if (!T_SOLID[type[i]] || supMark[i] === g) continue;
+    const start = cn, id = ++compSerial;
+    supMark[i] = g; qh = 0; qt = 0; sQueue[qt++] = i;
+    let buoy = 1;
+    while (qh < qt){
+      const c = sQueue[qh++], x = c % W, y = (c / W) | 0;
+      compCells[cn++] = c; compId[c] = id;
+      if (!T_BUOY[type[c]]) buoy = 0;
+      for (let k = 0; k < 8; k++){
+        const nx = x + NB_DX[k], ny = y + NB_DY[k];
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const j = ny*W + nx;
+        if (supMark[j] !== g && T_SOLID[type[j]]){ supMark[j] = g; sQueue[qt++] = j; }
+      }
+    }
+    comps.push([start, cn, i, id, buoy]);   // 逆序扫描，i 即块内最大下标（最低点所在行）
+  }
+}
+// 没有固体变化时只重新检查缓存的悬空块能否下落（例如垫在下面的沙子流走了）
+function dropLooseSolids(){
+  // 自下而上处理，下面的块先落，上面的块才能跟着落
+  let moved = false;
+  for (const [s0, s1, , id, buoy] of comps){
+    let ok = true;
+    for (let k = s0; k < s1 && ok; k++){
+      const j = compCells[k] + W;
+      if (j >= N){ ok = false; break; }
+      if (compId[j] === id) continue;
+      const u = type[j], kd = T_KIND[u];
+      if (T_SOLID[u] || kd === KIND.POWDER || (buoy && u === E.WATER)) ok = false;
+    }
+    if (!ok) continue;
+    const cells = compCells.subarray(s0, s1).sort();     // 升序；从最下面一行往上逐格交换
+    for (let k = cells.length - 1; k >= 0; k--) swap(cells[k], cells[k] + W);
+    moved = true;
+  }
+  return moved;
+}
+
+function step(){
+  frameId = frameId>=255 ? 1 : frameId+1;
+  for (let y=H-1;y>=0;y--){
+    const ltr=((y+frameId)&1)===0, row=y*W;
+    for (let k=0;k<W;k++){
+      const x=ltr?k:W-1-k, i=row+x, t=type[i];
+      if (t===E.EMPTY || stamp[i]===frameId) continue;
+      switch(t){
+        case E.SAND:  stepPowder(i,x,y,t); break;
+        case E.WATER: stepLiquid(i,x,y,t,5); break;
+        case E.OIL:   stepLiquid(i,x,y,t,3); break;
+        case E.LAVA:  stepLava(i,x,y); break;
+        case E.STEAM: case E.SMOKE: stepGas(i,x,y,t); break;
+        case E.FIRE:  stepFire(i,x,y); break;
+        case E.PLANT: stepPlant(i,x,y); break;
+        case E.ICE:   stepIce(i,x,y); break;
+        // STONE / WOOD / GLASS：静态
+      }
+    }
+  }
+  settleSolids();
+}
+
+
+/* =====================================================================
+ * SHIFT · 游戏逻辑（不依赖 DOM，可在 Node 中测试）
+ * 世界始终在"重力向下"的模拟坐标系里运行；转向重力 = 旋转网格内容 + 反向旋转画布，
+ * 所以屏幕上世界看起来不动，只有重力方向变了。
+ * ===================================================================== */
+const BLOCK = 8, CH = S / BLOCK;          // 关卡用 20×20 字符画，每字符 8×8 格
+const zone = new Uint8Array(N);           // 目标区编号（0 = 无）
+const tmpA = new Uint8Array(N), tmpB = new Uint8Array(N), tmpC = new Uint8Array(N), tmpZ = new Uint8Array(N);
+
+// 字符图例：# 石头  . 空  ~ 水  s 沙  o 油  L 熔岩  i 冰  w 木头  1-3 目标区（空）
+const LEGEND = { '#':E.STONE, '.':E.EMPTY, '~':E.WATER, 's':E.SAND, 'o':E.OIL, 'L':E.LAVA, 'i':E.ICE, 'w':E.WOOD };
+
+const LEVELS = [
+  { name:'第一次转向', par:2, hint:'水杯开口朝上。先把水倒出来，再让它流进右下角的目标区。',
+    goals:[{zone:1, el:E.WATER, need:280}],
+    map:[
+      '####################',
+      '#..................#',
+      '##~~~~#............#',
+      '##~~~~#............#',
+      '#######............#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..............#111#',
+      '#..............#111#',
+      '#..............#111#',
+      '#..............#111#',
+      '#..............#111#',
+      '#..............#111#',
+      '####################' ]},
+  { name:'滚石', par:4, hint:'没连着墙的石块会跟着重力一起掉，它能挡路，也能帮你。',
+    goals:[{zone:1, el:E.WATER, need:300}],
+    map:[
+      '####################',
+      '#..................#',
+      '#..~~~~~...........#',
+      '#..~~~~~...........#',
+      '#..~~~~~...........#',
+      '#########...########',
+      '#.......#...#......#',
+      '#.......#...#......#',
+      '#.......#.###......#',
+      '#.......#..........#',
+      '#.......#..........#',
+      '#.......#####..#####',
+      '#..............#...#',
+      '#..............#...#',
+      '#.......##.....#...#',
+      '#######.##.....#...#',
+      '#111111.##.........#',
+      '#111111............#',
+      '#111111............#',
+      '####################' ]},
+  { name:'两只杯子', par:4, hint:'两个杯子都要装够水。杯口只开了一半，想想水从哪边灌进去。',
+    goals:[{zone:1, el:E.WATER, need:250},{zone:2, el:E.WATER, need:250}],
+    map:[
+      '####################',
+      '#........##........#',
+      '#........##........#',
+      '#.....#~~##~~#.....#',
+      '#.....#~~##~~#.....#',
+      '#.....#~~##~~#.....#',
+      '#.....#~~##~~#.....#',
+      '#.....########.....#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#.###..........###.#',
+      '#111#..........#222#',
+      '#111#..........#222#',
+      '#111#..........#222#',
+      '####################' ]},
+  { name:'油水分离', par:5, hint:'油比水轻，总浮在上面。油进上面的杯子，水进下面的杯子。',
+    goals:[{zone:1, el:E.OIL, need:170},{zone:2, el:E.WATER, need:300}],
+    map:[
+      '####################',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..................#',
+      '#..............#111#',
+      '#..............#111#',
+      '#..............#111#',
+      '#..............#####',
+      '#..................#',
+      '#..................#',
+      '#.#oooooo#.........#',
+      '#.#oooooo#.........#',
+      '#.#~~~~~~#.....#222#',
+      '#.#~~~~~~#.....#222#',
+      '#.########.....#222#',
+      '####################' ]},
+  { name:'之字形', par:11, hint:'水只会往"下"流。一层一层把它送到最底下的目标区。',
+    goals:[{zone:1, el:E.WATER, need:350}],
+    map:[
+      '####################',
+      '#~~~...............#',
+      '#~~~...............#',
+      '#~~~...............#',
+      '#################..#',
+      '#..................#',
+      '#..................#',
+      '#..#################',
+      '#..................#',
+      '#..................#',
+      '#################..#',
+      '#..................#',
+      '#..................#',
+      '#..#################',
+      '#..................#',
+      '#..................#',
+      '#..#############...#',
+      '#..#111111111111...#',
+      '#..#111111111111...#',
+      '####################' ]},
+];
+
+let levelIdx = 0, gdir = 0, moves = 0, level = null;   // gdir: 屏幕上的重力方向 0下 1左 2上 3右
+function loadLevel(k){
+  levelIdx = k; level = LEVELS[k]; gdir = 0; moves = 0;
+  type.fill(0); life.fill(0); shade.fill(0); stamp.fill(0); zone.fill(0);
+  const m = level.map;
+  for (let cy = 0; cy < CH; cy++) for (let cx = 0; cx < CH; cx++){
+    const c = m[cy][cx];
+    const t = (c >= '1' && c <= '9') ? E.EMPTY : LEGEND[c];
+    const z = (c >= '1' && c <= '9') ? +c : 0;
+    for (let y = cy*BLOCK; y < (cy+1)*BLOCK; y++) for (let x = cx*BLOCK; x < (cx+1)*BLOCK; x++){
+      const i = y*S + x; type[i] = t; zone[i] = z; shade[i] = (Math.random()*256)|0;
+      life[i] = t===E.ICE ? 0 : 0;
+    }
+  }
+  solidDirty = true;
+}
+// 把网格内容顺时针旋转 k×90°
+function rotateGrid(k){
+  k = ((k % 4) + 4) % 4; if (!k) return;
+  for (let r = 0; r < k; r++){
+    tmpA.set(type); tmpB.set(life); tmpC.set(shade); tmpZ.set(zone);
+    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++){
+      const src = y*S + x, dst = x*S + (S-1-y);
+      type[dst] = tmpA[src]; life[dst] = tmpB[src]; shade[dst] = tmpC[src]; zone[dst] = tmpZ[src];
+    }
+  }
+  stamp.fill(0); solidDirty = true;
+}
+// 把屏幕重力设为 d（0下 1左 2上 3右）；返回是否真的转了
+// 把整个盒子顺时针转 k×90°（玩家视角：重力永远朝屏幕下方）
+function rotateWorld(k){
+  k = ((k % 4) + 4) % 4; if (!k) return false;
+  rotateGrid(k); gdir = (gdir - k + 4) % 4; moves++;
+  return true;
+}
+function setGravity(d){
+  if (d === gdir) return false;
+  rotateGrid(gdir - d);   // simB = R(a-b)·simA，保证屏幕画面不变
+  gdir = d; moves++;
+  return true;
+}
+function goalCounts(){
+  const c = level.goals.map(() => 0);
+  for (let i = 0; i < N; i++){
+    const z = zone[i]; if (!z) continue;
+    for (let g = 0; g < level.goals.length; g++){
+      const G = level.goals[g]; if (G.zone === z && type[i] === G.el) c[g]++;
+    }
+  }
+  return c;
+}
+function goalOk(G, c){ return G.max !== undefined ? c <= G.max : c >= G.need; }
+function isWon(){ const c = goalCounts(); return level.goals.every((G, g) => goalOk(G, c[g])); }
+
+
+/* =====================================================================
+ * 渲染与输入
+ * ===================================================================== */
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+cv.width = S; cv.height = S;
+const img = ctx.createImageData(S, S), buf = new Uint32Array(img.data.buffer);
+const pack = (r,g,b) => (0xff000000 | (Math.max(0,Math.min(255,b))<<16) | (Math.max(0,Math.min(255,g))<<8) | Math.max(0,Math.min(255,r))) >>> 0;
+const hex = h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+const PAL = new Uint32Array(16*16);
+DEF.forEach((d,t) => { const [r,g,b] = hex(d.color), v = d.vary || 0;
+  for (let s = 0; s < 16; s++){ const o = ((s/15)*2-1)*v; PAL[t*16+s] = pack(r+o, g+o, b+o*.6); } });
+const BG = pack(16,20,34), ZONE_BG = [0, pack(58,52,22), pack(30,52,58), pack(52,30,58)];
+const ZONE_EDGE = [0, pack(255,209,102), pack(110,210,235), pack(210,140,240)];
+function render(tick){
+  for (let i = 0; i < N; i++){
+    const t = type[i], z = zone[i];
+    if (t === E.EMPTY){
+      if (z){
+        const x = i % S, y = (i / S) | 0;
+        const edge = (x>0 && zone[i-1]!==z) || (x<S-1 && zone[i+1]!==z) || (y>0 && zone[i-S]!==z) || (y<S-1 && zone[i+S]!==z);
+        buf[i] = edge && ((x+y+(tick>>2))&3)===0 ? ZONE_EDGE[z] : ZONE_BG[z];
+      } else buf[i] = BG;
+      continue;
+    }
+    if (t === E.FIRE){ buf[i] = pack(255, 120+life[i]*3, 40); continue; }
+    if (t === E.LAVA){ buf[i] = PAL[t*16 + (((shade[i]>>4) + (tick>>3) + i) & 15)]; continue; }
+    buf[i] = PAL[t*16 + (shade[i]>>4)];
+  }
+  ctx.putImageData(img, 0, 0);
+}
+function fit(){
+  const st = document.getElementById('stage').getBoundingClientRect();
+  const s = Math.max(1, Math.floor(Math.min(st.width - 8, st.height - 8) / S * 4) / 4);
+  cv.style.width = cv.style.height = Math.floor(S*s) + 'px';
+}
+addEventListener('resize', fit);
+if (window.ResizeObserver) new ResizeObserver(fit).observe(document.getElementById('stage'));
+
+/* ---------- 游戏流程 ---------- */
+const $ = id => document.getElementById(id);
+const SAVE_KEY = 'shift-progress-v1';
+let best = {}; try { best = JSON.parse(localStorage.getItem(SAVE_KEY)) || {}; } catch(e){}
+let tiltUntil = 0, won = false, winHold = 0;
+const stars = (m, par) => m <= par ? 3 : m <= par + 2 ? 2 : 1;
+
+function buildLevelButtons(){
+  const el = $('lvBtns'); el.innerHTML = '';
+  LEVELS.forEach((L, k) => {
+    const b = document.createElement('button');
+    b.textContent = k + 1; b.title = L.name + (best[k] ? `（最佳 ${best[k]} 步）` : '');
+    if (k === levelIdx) b.classList.add('on');
+    if (best[k]) b.classList.add('done');
+    b.onclick = () => start(k);
+    el.appendChild(b);
+  });
+}
+function buildGoals(){
+  $('goals').innerHTML = level.goals.map((G, g) =>
+    `<span class="goal"><span>${G.zone===1?'①':G.zone===2?'②':'③'} ${DEF[G.el].name}</span><span class="bar"><i id="gb${g}"></i></span></span>`).join('');
+}
+function updateHud(){
+  $('moves').textContent = `步数 ${moves} · 目标 ${level.par} 步`;
+  const c = goalCounts();
+  level.goals.forEach((G, g) => {
+    const f = Math.min(1, c[g] / G.need), bar = $('gb'+g);
+    bar.style.width = (f*100).toFixed(0) + '%'; bar.classList.toggle('ok', f >= 1);
+  });
+}
+function start(k){
+  loadLevel(k); won = false; winHold = 0;
+  $('win').classList.remove('show');
+  $('lvName').textContent = `${k+1}. ${level.name}`;
+  $('hint').textContent = level.hint;
+  buildLevelButtons(); buildGoals(); updateHud();
+  cv.classList.remove('tilt'); cv.style.transform = '';
+  // 开局先空跑一会儿让场景稳定
+  for (let n = 0; n < 30; n++) step();
+}
+function turn(k){
+  if (won) return;
+  if (!rotateWorld(k)) return;
+  // 先把画布反向转回去（看上去没变），再动画转正：玩家看到的是"盒子在转"
+  cv.classList.remove('tilt');
+  cv.style.transform = `rotate(${-k*90}deg)`;
+  void cv.offsetWidth;
+  cv.classList.add('tilt');
+  cv.style.transform = 'rotate(0deg)';
+  tiltUntil = performance.now() + 280;
+  updateHud();
+}
+function win(){
+  won = true;
+  const s = stars(moves, level.par);
+  if (!best[levelIdx] || moves < best[levelIdx]) best[levelIdx] = moves;
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(best)); } catch(e){}
+  $('winStars').textContent = '★'.repeat(s) + '☆'.repeat(3 - s);
+  $('winText').textContent = `用了 ${moves} 步（目标 ${level.par} 步）`;
+  const last = levelIdx === LEVELS.length - 1;
+  $('winTitle').textContent = last ? '全部通关！' : '过关！';
+  $('nextBtn').textContent = last ? '再玩一遍' : '下一关';
+  $('win').classList.add('show');
+  buildLevelButtons();
+}
+$('nextBtn').onclick = () => start(levelIdx === LEVELS.length - 1 ? 0 : levelIdx + 1);
+$('ccw').onclick = () => turn(3);   // 逆时针 = 顺时针 3 次
+$('cw').onclick = () => turn(1);
+$('flip').onclick = () => turn(2);
+$('reset').onclick = () => start(levelIdx);
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'arrowleft' || k === 'a' || k === 'q'){ e.preventDefault(); turn(3); }
+  else if (k === 'arrowright' || k === 'd' || k === 'e'){ e.preventDefault(); turn(1); }
+  else if (k === 'arrowup' || k === 'w' || k === 'arrowdown' || k === 's'){ e.preventDefault(); turn(2); }
+  else if (k === 'r') start(levelIdx);
+  else if ((k === 'enter' || k === ' ') && won){ e.preventDefault(); $('nextBtn').click(); }
+});
+// 手机：在画面上左右滑动转向，上下滑动翻转
+let sw = null;
+$('stage').addEventListener('pointerdown', e => { sw = [e.clientX, e.clientY]; });
+$('stage').addEventListener('pointerup', e => {
+  if (!sw) return; const dx = e.clientX - sw[0], dy = e.clientY - sw[1]; sw = null;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 40) return;
+  if (Math.abs(dx) > Math.abs(dy)) turn(dx > 0 ? 1 : 3); else turn(2);
+});
+
+let tick = 0;
+function loop(now){
+  if (now >= tiltUntil && !won){
+    step(); step();
+    if ((tick & 7) === 0){
+      updateHud();
+      if (isWon()){ if (++winHold >= 4) win(); } else winHold = 0;
+    }
+  }
+  render(tick++);
+  requestAnimationFrame(loop);
+}
+start(0); fit();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
