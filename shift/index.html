@@ -621,7 +621,8 @@ function turn(k){
   if (!rotateWorld(k)) return;
   // 先把画布反向转回去（看上去没变），再动画转正：玩家看到的是"盒子在转"
   cv.classList.remove('tilt');
-  cv.style.transform = `rotate(${-k*90}deg)`;
+  const d = k === 3 ? -1 : k;              // 逆时针转 = 走 -90°，不绕 270° 的远路
+  cv.style.transform = `rotate(${-d*90}deg)`;
   void cv.offsetWidth;
   cv.classList.add('tilt');
   cv.style.transform = 'rotate(0deg)';
