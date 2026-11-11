@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>生长城市 · 每日世界</title>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:#0e1116;color:#e6e6ea;font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;font-size:14px}
@@ -28,6 +29,8 @@ canvas#view{display:block;cursor:crosshair;touch-action:none}
 #chron li:hover{color:#4ecdc4}
 #chron li .y{color:#7f8a9c;margin-right:6px}
 #chron.closed ul{display:none}
+#view3d{position:absolute;inset:0;display:none}#view3d canvas{display:block}#labels{position:absolute;left:0;top:0;pointer-events:none}
+#era{position:absolute;right:10px;top:10px;background:rgba(14,17,22,.86);border:1px solid #2a3240;border-radius:10px;padding:6px 10px;font-size:12.5px;color:#9aa4b5}#era b{color:#fff}#era.vert b{color:#7fd6ff}
 #tip{position:absolute;pointer-events:none;background:rgba(10,12,16,.92);border:1px solid #2f3848;border-radius:6px;padding:5px 8px;font-size:12px;white-space:nowrap;display:none}
 aside{width:270px;border-left:1px solid #232a36;background:#12161d;padding:12px;overflow:auto;display:flex;flex-direction:column;gap:14px}
 aside h3{font-size:13px;color:#9aa4b5;margin-bottom:6px;font-weight:500}
@@ -56,7 +59,10 @@ canvas#chart{width:100%;height:60px;background:#0d1015;border-radius:6px}
   <span class="stat">第<b id="sYear">0</b> 年</span>
   <span class="stat">人口<b id="sPop">0</b></span>
   <span class="stat">聚落<b id="sTowns">0</b></span>
+  <span class="stat">绿地开发<b id="sDev">0%</b></span>
+  <span class="stat">最高<b id="sFloors">1</b> 层</span>
   <span class="grow"></span>
+  <button id="b3d">🧊 3D 视角</button>
   <button id="bPlay">⏸ 暂停</button>
   <span class="stat">速度</span><input type="range" id="speed" min="1" max="40" value="8"><span class="stat" id="sSpeed">8 年/秒</span>
   <input type="text" id="seed" title="种子">
@@ -66,6 +72,8 @@ canvas#chart{width:100%;height:60px;background:#0d1015;border-radius:6px}
 <main>
   <div id="stage">
     <canvas id="view"></canvas>
+    <div id="view3d"><canvas id="labels"></canvas></div>
+    <div id="era">时代：<b id="eraName">平地生长</b></div>
     <div id="chron"><h3><span>📜 编年史</span><span id="chronToggle">收起</span></h3><ul id="chronList"></ul></div>
     <div id="tip"></div>
   </div>
@@ -239,7 +247,7 @@ const City = (function () {
             fert: new Float32Array(N), distWater: new Uint8Array(N),
             build: new Uint8Array(N), level: new Uint8Array(N), owner: new Int16Array(N).fill(-1), ruinAge: new Uint16Array(N),
             access: new Uint16Array(N).fill(9999),
-            towns: [], used: new Set(), events: [], history: [], stats: {}
+            towns: [], used: new Set(), events: [], history: [], stats: {}, devRatio: 0, vertical: false, verticalYear: 0
         };
         genTerrain(w);
         // 第一批村庄
@@ -443,17 +451,18 @@ const City = (function () {
             const b = w.build[i], k = c[o];
             if (b === B.HOUSE) { k.house++; k.housing += w.level[i] * 8; }
             else if (b === B.FARM) { k.farm++; k.food += 6 + w.fert[i] * 14; k.jobs += 2; }
-            else if (b === B.MARKET) { k.market++; k.jobs += 10; k.food += 4; }
-            else if (b === B.WORKSHOP) { k.workshop++; k.jobs += 12; }
+            else if (b === B.MARKET) { k.market++; k.jobs += 10 * w.level[i]; k.food += 4; }
+            else if (b === B.WORKSHOP) { k.workshop++; k.jobs += 12 * w.level[i]; }
             else if (b === B.MINE) { k.mine++; k.jobs += 10; }
             else if (b === B.PORT) { k.port++; k.jobs += 20; k.food += 40; }
             if (b !== B.NONE && b !== B.ROAD && b !== B.RUIN) k.cells++;
         }
-        // 贸易：港口和道路相连的邻镇带来少量粮食
+        // 高层时代：粮食从外地和港口大量运入
+        if (w.vertical) for (const k of c) k.food = k.food * 2.2 + k.port * 200;
         return c;
     }
     const STATUS_AT = { town: 220, city: 900 };
-    function maxLevel(t) { return t.status === 'city' ? 4 : t.status === 'town' ? 2 : 1; }
+    function maxLevel(t, w) { if (w && w.vertical) return t.status === 'city' ? 20 : t.status === 'town' ? 6 : 2; return t.status === 'city' ? 4 : t.status === 'town' ? 2 : 1; }
 
     function step(w) {
         const rng = w.rng;
@@ -471,7 +480,7 @@ const City = (function () {
             t.peak = Math.max(t.peak, t.pop);
             // 建设预算
             let budget = 1 + Math.floor(t.pop / 200);
-            const lvlMax = maxLevel(t);
+            const lvlMax = maxLevel(t, w);
             let guard = 0;
             while (budget > 0 && guard++ < 12) {
                 const needHouse = t.pop > k.housing * 0.8, needFood = t.pop > k.food * 0.85, needJobs = t.pop > k.jobs * 1.2;
@@ -479,11 +488,11 @@ const City = (function () {
                 if (needFood) { done = placeType(w, t, B.FARM); if (done) k.food += 12; }
                 else if (needHouse) {
                     // 先加密：市中心附近的民居升级
-                    if (lvlMax > 1 && rng() < 0.55) {
-                        for (let tries = 0; tries < 25 && !done; tries++) {
+                    if (lvlMax > 1 && rng() < (w.vertical ? 0.92 : 0.55)) {
+                        for (let tries = 0; tries < (w.vertical ? 60 : 25) && !done; tries++) {
                             const ri = t.roads[Math.floor(rng() * t.roads.length)], x = ri % W + Math.round(rng() * 2 - 1), y = ((ri / W) | 0) + Math.round(rng() * 2 - 1);
                             if (!inb(x, y)) continue; const i = idx(x, y);
-                            if (w.build[i] === B.HOUSE && w.level[i] < lvlMax && w.access[ri] < 6 + w.level[i] * 4) { w.level[i]++; k.housing += 8; done = true; }
+                            if (w.build[i] === B.HOUSE && w.level[i] < lvlMax && w.access[ri] < (w.vertical ? 40 - w.level[i] * 2 : 6 + w.level[i] * 4)) { w.level[i]++; k.housing += 8; done = true; }
                         }
                     }
                     if (!done) { done = placeType(w, t, B.HOUSE); if (done) k.housing += 8; }
@@ -492,7 +501,9 @@ const City = (function () {
                     if (k.mine < 1 + t.pop / 250 && roll < 0.4) done = placeType(w, t, B.MINE);
                     if (!done && t.status !== 'village' && !t.hasPort && t.pop > 300 && roll < 0.6) { done = placeType(w, t, B.PORT); if (done) { t.hasPort = true; log(w, 'port', fullName(t) + ' 建起了港口，海上贸易开始了', t.x, t.y, true); } }
                     if (!done && k.market < 1 + t.pop / 300 && roll < 0.75) done = placeType(w, t, B.MARKET);
+                    if (!done && w.vertical && rng() < 0.7) done = upgradeJob(w, t);
                     if (!done) done = placeType(w, t, B.WORKSHOP);
+                    if (!done && w.vertical) done = upgradeJob(w, t);
                     if (done) k.jobs += 10;
                 }
                 if (!needFood && !needHouse && !needJobs) break;
@@ -523,6 +534,14 @@ const City = (function () {
         if (alive.length < 14 && rng() < 0.012 + total / 60000) { const s = bestSite(w, 300); if (s >= 0) found(w, s % W, (s / W) | 0); }
         if (w.year % 3 === 0) computeAccess(w);
         stats(w);
+    }
+    function upgradeJob(w, t) {
+        for (let k = 0; k < 40; k++) {
+            const ri = t.roads[Math.floor(w.rng() * t.roads.length)], x = ri % W + Math.round(w.rng() * 2 - 1), y = ((ri / W) | 0) + Math.round(w.rng() * 2 - 1);
+            if (!inb(x, y)) continue; const i = idx(x, y);
+            if ((w.build[i] === B.WORKSHOP || w.build[i] === B.MARKET) && w.owner[i] === t.id && w.level[i] < (t.status === 'city' ? 8 : 4)) { w.level[i]++; return true; }
+        }
+        return false;
     }
     function bridgeOut(w, t) {
         // 往河对岸延伸：找附近的河，修路过去
@@ -603,6 +622,17 @@ const City = (function () {
         const s = { pop: 0, towns: 0, cities: 0, villages: 0, buildings: 0, roads: 0, ruins: 0, bridges: 0 };
         for (const t of w.towns) { if (t.status === 'abandoned') continue; s.towns++; s.pop += t.pop; if (t.status === 'city') s.cities++; else if (t.status === 'village') s.villages++; }
         for (let i = 0; i < N; i++) { const b = w.build[i]; if (b === B.ROAD) s.roads++; else if (b === B.BRIDGE) s.bridges++; else if (b === B.RUIN) s.ruins++; else if (b) s.buildings++; }
+        let land = 0, used = 0;
+        for (let i = 0; i < N; i++) if (!w.water[i] && w.height[i] < 0.8) { land++; if (w.build[i] && w.build[i] !== B.RUIN) used++; }
+        w.devRatio = used / Math.max(1, land);
+        s.dev = w.devRatio;
+        if (!w.vertical && w.devRatio >= 0.8) {
+            w.vertical = true; w.verticalYear = w.year;
+            let big = null; for (const t of w.towns) if (t.status !== 'abandoned' && (!big || t.pop > big.pop)) big = t;
+            log(w, 'vertical', '绿地已开发 80%：城市开始向空中发展' + (big ? '，' + fullName(big) + ' 的第一批高楼动工' : ''), big ? big.x : W / 2, big ? big.y : H / 2, true);
+        }
+        let maxLv = 0; for (let i = 0; i < N; i++) if (w.build[i] === B.HOUSE && w.level[i] > maxLv) maxLv = w.level[i];
+        s.maxFloors = maxLv;
         s.pop = Math.round(s.pop);
         w.stats = s;
         w.history.push({ y: w.year, pop: s.pop });
@@ -636,13 +666,14 @@ if (typeof module !== 'undefined') module.exports = City;
 
     let world, playing = true, speed = 8, acc = 0, last = performance.now(), cell = 6, tool = 'look', selected = null, hover = -1, flash = null, dirty = true;
     let terrainRGB = new Uint8Array(N * 3);
+    let mode3d = false, r3d = null, last3d = 0;
 
     function today() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
     function start(seed) {
         world = City.createWorld(seed); selected = null; flash = null;
         $('seed').value = seed;
         const u = new URL(location.href); u.searchParams.set('seed', seed); history.replaceState(null, '', u);
-        buildTerrain(); dirty = true; refreshPanels(true);
+        buildTerrain(); paint(); if (r3d) r3d.setWorld(world); dirty = true; refreshPanels(true);
     }
 
     // ---------- 颜色 ----------
@@ -689,6 +720,7 @@ if (typeof module !== 'undefined') module.exports = City;
         view.style.width = Math.floor(W * s) + 'px'; view.style.height = Math.floor(H * s) + 'px';
         view.width = Math.floor(W * s * dpr); view.height = Math.floor(H * s * dpr);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        if (r3d) r3d.resize();
         dirty = true;
     }
 
@@ -728,6 +760,9 @@ if (typeof module !== 'undefined') module.exports = City;
     function refreshPanels(force) {
         const s = world.stats;
         $('sYear').textContent = world.year; $('sPop').textContent = s.pop.toLocaleString(); $('sTowns').textContent = s.towns;
+        $('sDev').textContent = Math.round(s.dev * 100) + '%'; $('sFloors').textContent = s.maxFloors;
+        $('eraName').textContent = world.vertical ? '向空中发展（第 ' + world.verticalYear + ' 年起）' : '平地生长 · 绿地开发到 80% 后起高楼';
+        $('era').classList.toggle('vert', world.vertical);
         // 编年史
         const major = world.events.filter(e => e.major || e.type === 'bridge' || e.type === 'user');
         if (force || major.length !== lastEventCount || world.events.length >= 400) {
@@ -737,7 +772,7 @@ if (typeof module !== 'undefined') module.exports = City;
                 const li = document.createElement('li');
                 li.innerHTML = '<span class="y">' + e.t + ' 年</span>';
                 li.appendChild(document.createTextNode(e.text));
-                li.onclick = () => { flash = { x: e.x, y: e.y, t: performance.now() }; dirty = true; };
+                li.onclick = () => { flash = { x: e.x, y: e.y, t: performance.now() }; if (mode3d && r3d) r3d.focus(Math.round(e.x), Math.round(e.y)); dirty = true; };
                 ul.appendChild(li);
             }
         }
@@ -748,7 +783,7 @@ if (typeof module !== 'undefined') module.exports = City;
             const li = document.createElement('li'); if (t.status === 'abandoned') li.className = 'dead';
             li.innerHTML = '<span></span><span>' + (t.status === 'abandoned' ? '—' : Math.round(t.pop).toLocaleString() + ' 人') + '</span>';
             li.firstChild.textContent = City.fullName(t);
-            li.onclick = () => { select(t); flash = { x: t.x, y: t.y, t: performance.now() }; };
+            li.onclick = () => { select(t); flash = { x: t.x, y: t.y, t: performance.now() }; if (mode3d && r3d) r3d.focus(t.x, t.y); };
             ul.appendChild(li);
         }
         drawChart();
@@ -817,6 +852,17 @@ if (typeof module !== 'undefined') module.exports = City;
     document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => {
         tool = b.dataset.tool; document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x === b)); hint(HINTS[tool]);
     });
+    function set3d(on) {
+        if (on && !window.City3D) { hint('3D 引擎还在加载，稍等一下再点。'); return; }
+        mode3d = on;
+        if (on && !r3d) { r3d = window.City3D.create($('view3d'), off, $('labels')); }
+        $('view3d').style.display = on ? 'block' : 'none'; view.style.display = on ? 'none' : 'block';
+        $('b3d').textContent = on ? '🗺 2D 视角' : '🧊 3D 视角'; $('b3d').classList.toggle('on', on);
+        if (on) { r3d.resize(); paint(); r3d.setWorld(world); hint('拖动旋转，右键平移，滚轮缩放。点编年史或聚落可以飞过去。挖河、放矿、建村请切回 2D。'); }
+        else hint(HINTS[tool]);
+        dirty = true;
+    }
+    $('b3d').onclick = () => set3d(!mode3d);
     $('bPlay').onclick = () => { playing = !playing; $('bPlay').textContent = playing ? '⏸ 暂停' : '▶ 继续'; };
     $('speed').oninput = e => { speed = +e.target.value; $('sSpeed').textContent = speed + ' 年/秒'; };
     $('bSeed').onclick = () => { const v = $('seed').value.trim(); start(v && v !== world.seed ? v : Math.random().toString(36).slice(2, 8)); };
@@ -835,7 +881,10 @@ if (typeof module !== 'undefined') module.exports = City;
             while (acc >= 1 && n < 10) { City.step(world); acc -= 1; n++; dirty = true; }
             if (n === 10) acc = 0;
         }
-        if (dirty) { draw(); dirty = false; }
+        if (mode3d && r3d) {
+            if (dirty && now - last3d > 250) { paint(); r3d.update(); last3d = now; dirty = false; }
+            r3d.render();
+        } else if (dirty) { draw(); dirty = false; }
         if (now - panelT > 400) { panelT = now; refreshPanels(); }
         requestAnimationFrame(frame);
     }
@@ -844,6 +893,140 @@ if (typeof module !== 'undefined') module.exports = City;
     start(q || 'day-' + today());
     requestAnimationFrame(frame);
 })();
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// 3D 视角：地形高度图 + 2D 画面作贴图 + 建筑按层数立起来
+window.City3D = {
+    create(container, offCanvas, labelCanvas) {
+        const { W, H, N, B } = City;
+        const S = 22;                                   // 地形高度放大
+        const FLOOR = 0.55;                             // 每层高度
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+        renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; renderer.shadowMap.autoUpdate = false;
+        container.appendChild(renderer.domElement);
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0f141c);
+        scene.fog = new THREE.Fog(0x0f141c, 180, 360);
+        const camera = new THREE.PerspectiveCamera(45, 1, 0.5, 800);
+        camera.position.set(0, 105, 115);
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true; controls.maxPolarAngle = 1.42; controls.minDistance = 12; controls.maxDistance = 300;
+
+        scene.add(new THREE.HemisphereLight(0xe4f0ff, 0x2a3320, 0.95));
+        const sun = new THREE.DirectionalLight(0xfff1dc, 1.7);
+        sun.position.set(-70, 110, 50); sun.castShadow = true;
+        sun.shadow.mapSize.set(2048, 2048);
+        Object.assign(sun.shadow.camera, { left: -95, right: 95, top: 70, bottom: -70, near: 10, far: 320 });
+        sun.shadow.bias = -0.0006;
+        scene.add(sun);
+
+        // 地形
+        const geo = new THREE.PlaneGeometry(W, H, W - 1, H - 1);
+        geo.rotateX(-Math.PI / 2);
+        const tex = new THREE.CanvasTexture(offCanvas);
+        tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.LinearMipmapLinearFilter; tex.colorSpace = THREE.SRGBColorSpace;
+        const ground = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0 }));
+        ground.receiveShadow = true;
+        scene.add(ground);
+        const sea = new THREE.Mesh(new THREE.PlaneGeometry(W * 3, H * 3), new THREE.MeshStandardMaterial({ color: 0x1d4f86, transparent: true, opacity: 0.55, roughness: 0.3 }));
+        sea.rotation.x = -Math.PI / 2; sea.position.y = -0.35;
+        scene.add(sea);
+
+        // 建筑
+        const box = new THREE.BoxGeometry(1, 1, 1); box.translate(0, 0.5, 0);
+        const mat = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.05 });
+        const inst = new THREE.InstancedMesh(box, mat, N);
+        inst.castShadow = true; inst.receiveShadow = true; inst.count = 0;
+        inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        scene.add(inst);
+        const m4 = new THREE.Matrix4(), col = new THREE.Color(), q = new THREE.Quaternion(), pos = new THREE.Vector3(), scl = new THREE.Vector3();
+        const HOUSE_LOW = new THREE.Color(0xd9a76a), HOUSE_MID = new THREE.Color(0xd9485a), TOWER = new THREE.Color(0xcfe0f5);
+
+        let world = null;
+        const elev = new Float32Array(N);
+        function computeElev() {
+            for (let i = 0; i < N; i++) {
+                const h = world.height[i];
+                let e = (h - 0.3) * S;
+                if (world.water[i] === City.SEA) e = Math.min(-0.8, e);
+                else if (world.water[i] === City.RIVER) e = Math.max(-0.6, e - 0.7);
+                else e = Math.max(0.15, e);
+                elev[i] = e;
+            }
+            const p = geo.attributes.position;
+            for (let i = 0; i < N; i++) p.setY(i, elev[i]);
+            p.needsUpdate = true; geo.computeVertexNormals();
+        }
+        function updateBuildings() {
+            let n = 0;
+            for (let i = 0; i < N; i++) {
+                const b = world.build[i];
+                if (b !== B.HOUSE && b !== B.MARKET && b !== B.WORKSHOP && b !== B.MINE && b !== B.PORT) continue;
+                const lv = world.level[i];
+                let h, wdt = 0.8;
+                if (b === B.HOUSE) {
+                    h = lv * FLOOR + 0.15;
+                    if (lv <= 2) col.copy(HOUSE_LOW).lerp(HOUSE_MID, (lv - 1) * 0.5);
+                    else if (lv <= 4) col.copy(HOUSE_LOW).lerp(HOUSE_MID, 0.5 + (lv - 3) * 0.25);
+                    else { col.copy(HOUSE_MID).lerp(TOWER, Math.min(1, (lv - 4) / 4)); wdt = 0.72; }
+                } else if (b === B.MARKET) { h = 0.6 + lv * 0.45; col.set(0xffd23f); }
+                else if (b === B.WORKSHOP) { h = 0.7 + lv * 0.4; col.set(0x9a7fc0); }
+                else if (b === B.MINE) { h = 0.35; col.set(0x3d3d44); wdt = 0.9; }
+                else { h = 0.7; col.set(0x3fb6d8); wdt = 0.95; }
+                const x = i % W, y = (i / W) | 0;
+                pos.set(x - W / 2 + 0.5, elev[i], y - H / 2 + 0.5); scl.set(wdt, h, wdt);
+                m4.compose(pos, q, scl);
+                inst.setMatrixAt(n, m4); inst.setColorAt(n, col); n++;
+            }
+            inst.count = n;
+            inst.instanceMatrix.needsUpdate = true;
+            if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+            renderer.shadowMap.needsUpdate = true;
+        }
+
+        // 城镇名字：投影到屏幕画在叠加层上
+        const lctx = labelCanvas.getContext('2d'), v = new THREE.Vector3();
+        function drawLabels() {
+            const dpr = Math.min(2, window.devicePixelRatio || 1), w = labelCanvas.width / dpr, h = labelCanvas.height / dpr;
+            lctx.setTransform(dpr, 0, 0, dpr, 0, 0); lctx.clearRect(0, 0, w, h);
+            if (!world) return;
+            lctx.textAlign = 'center'; lctx.textBaseline = 'bottom';
+            for (const t of world.towns) {
+                const i = t.y * W + t.x;
+                let top = elev[i] + 2;
+                for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const x = t.x + dx, y = t.y + dy; if (x < 0 || y < 0 || x >= W || y >= H) continue; const j = y * W + x; if (world.build[j] === B.HOUSE) top = Math.max(top, elev[j] + world.level[j] * FLOOR + 1); }
+                v.set(t.x - W / 2 + 0.5, top, t.y - H / 2 + 0.5).project(camera);
+                if (v.z > 1) continue;
+                const sx = (v.x + 1) / 2 * w, sy = (1 - v.y) / 2 * h;
+                const size = t.status === 'city' ? 15 : t.status === 'town' ? 13 : 11;
+                lctx.font = (t.status === 'city' ? '600 ' : '') + size + 'px "PingFang SC","Microsoft YaHei",sans-serif';
+                const name = City.fullName(t);
+                lctx.lineWidth = 3; lctx.strokeStyle = 'rgba(0,0,0,0.75)'; lctx.strokeText(name, sx, sy);
+                lctx.fillStyle = t.status === 'abandoned' ? '#9a948c' : '#fff'; lctx.fillText(name, sx, sy);
+            }
+        }
+
+        const api = {
+            setWorld(w) { world = w; computeElev(); api.update(); },
+            terrainChanged() { computeElev(); api.update(); },
+            update() { if (!world) return; tex.needsUpdate = true; updateBuildings(); },
+            resize() {
+                const w = container.clientWidth, h = container.clientHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
+                renderer.setSize(w, h); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix();
+                labelCanvas.width = w * dpr; labelCanvas.height = h * dpr; labelCanvas.style.width = w + 'px'; labelCanvas.style.height = h + 'px';
+            },
+            render() { controls.update(); renderer.render(scene, camera); drawLabels(); },
+            focus(x, y) { const tx = x - W / 2 + 0.5, tz = y - H / 2 + 0.5; const d = camera.position.clone().sub(controls.target); controls.target.set(tx, elev[y * W + x] || 0, tz); camera.position.copy(controls.target).add(d.setLength(Math.min(d.length(), 70))); }
+        };
+        return api;
+    }
+};
+window.dispatchEvent(new Event('city3d-ready'));
+
 </script>
 </body>
 </html>
