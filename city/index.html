@@ -245,7 +245,7 @@ const City = (function () {
             seed, rng: mulberry32(hashSeed(String(seed))), year: 0,
             height: new Float32Array(N), water: new Uint8Array(N), forest: new Uint8Array(N), ore: new Uint8Array(N),
             fert: new Float32Array(N), distWater: new Uint8Array(N),
-            build: new Uint8Array(N), level: new Uint8Array(N), owner: new Int16Array(N).fill(-1), ruinAge: new Uint16Array(N),
+            build: new Uint8Array(N), level: new Uint8Array(N), owner: new Int16Array(N).fill(-1), ruinAge: new Uint16Array(N), built: new Uint16Array(N),
             access: new Uint16Array(N).fill(9999),
             towns: [], used: new Set(), events: [], history: [], stats: {}, devRatio: 0, vertical: false, verticalYear: 0
         };
@@ -279,7 +279,22 @@ const City = (function () {
         for (let k = 0; k < tries; k++) { const i = Math.floor(w.rng() * N), s = siteScore(w, i); if (s > bs) { bs = s; best = i; } }
         return best;
     }
-    function setB(w, i, b, owner, lvl) { w.build[i] = b; w.level[i] = lvl || 1; w.owner[i] = owner; w.ruinAge[i] = 0; if (b !== B.NONE) w.forest[i] = 0; }
+    const SOFT_CAP = 0.78, VERTICAL_AT = 0.72;
+    // 接近软终点时，新占绿地越来越难（废墟上重建不受限）
+    function greenBlocked(w, i) {
+        if (w.build[i] !== B.NONE || w.devRatio < SOFT_CAP - 0.04) return false;
+        if (w.devRatio >= SOFT_CAP) return true;
+        return w.rng() < (w.devRatio - (SOFT_CAP - 0.04)) / 0.04;
+    }
+    function lifespan(i, b, lv) {
+        const jit = (Math.imul(i, 2654435761) >>> 24) % 90;
+        if (b === B.HOUSE) return 110 + jit + (lv >= 5 ? 40 : 0);
+        if (b === B.WORKSHOP) return 130 + jit;
+        if (b === B.MARKET) return 170 + jit;
+        if (b === B.PORT) return 220 + jit;
+        return 0;
+    }
+    function setB(w, i, b, owner, lvl) { w.build[i] = b; w.level[i] = lvl || 1; w.owner[i] = owner; w.ruinAge[i] = 0; w.built[i] = w.year; if (b !== B.NONE) w.forest[i] = 0; }
 
     function found(w, x, y, byUser) {
         const t = { id: w.towns.length, name: makeName(w.rng, w.used), x, y, founded: w.year, pop: 12, peak: 12, status: 'village', roads: [], bridges: 0, hasPort: false };
@@ -331,6 +346,7 @@ const City = (function () {
             }
         }
         if (prev[to] < 0) return false;
+        if (w.devRatio >= SOFT_CAP - 0.01) { let g = 0; for (let j = prev[to]; j >= 0 && j !== from; j = prev[j]) if (w.build[j] === B.NONE && !w.water[j]) g++; if (g > 2) return false; }
         let i = prev[to], newBridge = false;
         while (i >= 0 && i !== from) {
             if (w.water[i] === RIVER) { if (w.build[i] !== B.BRIDGE) { setB(w, i, B.BRIDGE, t.id); newBridge = true; t.roads.push(i); } }
@@ -400,6 +416,7 @@ const City = (function () {
             if (s > bs) { bs = s; best = i; }
         }
         if (best < 0 || bs === -Infinity) return false;
+        if (greenBlocked(w, best)) return false;
         setB(w, best, type, t.id);
         // 不贴路的建筑修一条小路接上
         const x = best % W, y = (best / W) | 0;
@@ -437,6 +454,7 @@ const City = (function () {
             let tooClose = 0;
             for (const j of cells) { const cx = j % W, cy = (j / W) | 0; for (const s of [-1, 1]) { const nx = cx + px * s, ny = cy + py * s; if (inb(nx, ny) && w.build[idx(nx, ny)] === B.ROAD) tooClose++; } }
             if (tooClose > 1) continue;
+            if (greenBlocked(w, cells[0])) return false;
             for (const j of cells) { setB(w, j, B.ROAD, t.id); t.roads.push(j); }
             return true;
         }
@@ -528,10 +546,11 @@ const City = (function () {
         events(w);
         mining(w);
         ruins(w);
+        aging(w);
         // 开拓新村
         const alive = w.towns.filter(t => t.status !== 'abandoned');
         const total = alive.reduce((s, t) => s + t.pop, 0);
-        if (alive.length < 14 && rng() < 0.012 + total / 60000) { const s = bestSite(w, 300); if (s >= 0) found(w, s % W, (s / W) | 0); }
+        if (alive.length < 14 && rng() < 0.012 + total / 60000) { const s = bestSite(w, 300); if (s >= 0 && !greenBlocked(w, s)) found(w, s % W, (s / W) | 0); }
         if (w.year % 3 === 0) computeAccess(w);
         stats(w);
     }
@@ -615,6 +634,29 @@ const City = (function () {
             }
         }
     }
+    // 建筑寿命：到期后，繁荣的城镇会翻新，否则衰败成废墟，废墟几十年后变回绿地
+    function aging(w) {
+        const rng = w.rng; w.decayAcc = w.decayAcc || {}; w.renewAcc = w.renewAcc || {}; const lost = w.decayAcc, renew = w.renewAcc;
+        for (let i = w.year % 8; i < N; i += 8) {
+            const b = w.build[i];
+            const life = lifespan(i, b, w.level[i]);
+            if (!life || w.year - w.built[i] < life) continue;
+            const t = w.towns[w.owner[i]];
+            const thriving = t && t.status !== 'abandoned' && t.pop > t.peak * 0.75;
+            if (t && t.status !== 'abandoned' && rng() < (thriving ? 0.6 : 0.25)) {
+                w.built[i] = w.year;
+                if (!thriving && w.level[i] > 1) w.level[i]--;
+                renew[t.id] = (renew[t.id] || 0) + 1;
+            } else {
+                toRuin(w, i);
+                if (t) lost[t.id] = (lost[t.id] || 0) + 1;
+            }
+        }
+        if (w.year % 10) return;
+        for (const id in lost) if (lost[id] >= 10) { const t = w.towns[id]; log(w, 'decay', fullName(t) + ' 的老街区年久失修，' + lost[id] + ' 处建筑荒废', t.x, t.y, lost[id] >= 30); }
+        for (const id in renew) if (renew[id] >= 20 && w.rng() < 0.4) { const t = w.towns[id]; log(w, 'renew', fullName(t) + ' 翻新了 ' + renew[id] + ' 处老房子', t.x, t.y, false); }
+        w.decayAcc = {}; w.renewAcc = {};
+    }
     function ruins(w) {
         for (let i = 0; i < N; i++) if (w.build[i] === B.RUIN) { w.ruinAge[i]++; if (w.ruinAge[i] > 60 + (i % 40)) { w.build[i] = B.NONE; w.owner[i] = -1; if (w.fert[i] > 0.5 && (i % 3 === 0)) w.forest[i] = 1; } }
     }
@@ -626,10 +668,10 @@ const City = (function () {
         for (let i = 0; i < N; i++) if (!w.water[i] && w.height[i] < 0.8) { land++; if (w.build[i] && w.build[i] !== B.RUIN) used++; }
         w.devRatio = used / Math.max(1, land);
         s.dev = w.devRatio;
-        if (!w.vertical && w.devRatio >= 0.8) {
+        if (!w.vertical && w.devRatio >= VERTICAL_AT) {
             w.vertical = true; w.verticalYear = w.year;
             let big = null; for (const t of w.towns) if (t.status !== 'abandoned' && (!big || t.pop > big.pop)) big = t;
-            log(w, 'vertical', '绿地已开发 80%：城市开始向空中发展' + (big ? '，' + fullName(big) + ' 的第一批高楼动工' : ''), big ? big.x : W / 2, big ? big.y : H / 2, true);
+            log(w, 'vertical', '绿地已开发 ' + Math.round(VERTICAL_AT * 100) + '%：城市开始向空中发展' + (big ? '，' + fullName(big) + ' 的第一批高楼动工' : ''), big ? big.x : W / 2, big ? big.y : H / 2, true);
         }
         let maxLv = 0; for (let i = 0; i < N; i++) if (w.build[i] === B.HOUSE && w.level[i] > maxLv) maxLv = w.level[i];
         s.maxFloors = maxLv;
@@ -761,7 +803,7 @@ if (typeof module !== 'undefined') module.exports = City;
         const s = world.stats;
         $('sYear').textContent = world.year; $('sPop').textContent = s.pop.toLocaleString(); $('sTowns').textContent = s.towns;
         $('sDev').textContent = Math.round(s.dev * 100) + '%'; $('sFloors').textContent = s.maxFloors;
-        $('eraName').textContent = world.vertical ? '向空中发展（第 ' + world.verticalYear + ' 年起）' : '平地生长 · 绿地开发到 80% 后起高楼';
+        $('eraName').textContent = world.vertical ? '向空中发展（第 ' + world.verticalYear + ' 年起）' : '平地生长 · 绿地开发到 72% 后起高楼，约 78% 封顶';
         $('era').classList.toggle('vert', world.vertical);
         // 编年史
         const major = world.events.filter(e => e.major || e.type === 'bridge' || e.type === 'user');
