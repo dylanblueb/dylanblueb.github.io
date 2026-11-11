@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>生长城市 · 每日世界</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#0e1116;color:#e6e6ea;font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;font-size:14px}
+#app{display:flex;flex-direction:column;height:100%}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:8px 12px;background:#151a22;border-bottom:1px solid #232a36}
+header h1{font-size:16px;font-weight:600;margin-right:6px}
+header h1 a{color:inherit;text-decoration:none}
+.stat{color:#9aa4b5}.stat b{color:#fff;font-weight:600;margin-left:3px}
+button,select,input{font:inherit;color:#e6e6ea;background:#202733;border:1px solid #2f3848;border-radius:6px;padding:4px 10px;cursor:pointer}
+button:hover{border-color:#4ecdc4}
+button.on{background:#2b5f5b;border-color:#4ecdc4}
+input[type=text]{width:140px;cursor:text}
+input[type=range]{padding:0;width:90px;vertical-align:middle}
+.grow{flex:1}
+main{flex:1;display:flex;min-height:0}
+#stage{flex:1;position:relative;min-width:0;display:flex;align-items:center;justify-content:center;background:#0b0e13}
+canvas#view{display:block;cursor:crosshair;touch-action:none}
+#chron{position:absolute;left:10px;top:10px;width:300px;max-height:45%;overflow:auto;background:rgba(14,17,22,.86);border:1px solid #2a3240;border-radius:10px;padding:8px 10px;font-size:12.5px}
+#chron h3{font-size:13px;margin-bottom:6px;display:flex;justify-content:space-between;cursor:pointer}
+#chron ul{list-style:none}
+#chron li{padding:3px 0;border-top:1px solid #1f2632;cursor:pointer;line-height:1.45}
+#chron li:hover{color:#4ecdc4}
+#chron li .y{color:#7f8a9c;margin-right:6px}
+#chron.closed ul{display:none}
+#tip{position:absolute;pointer-events:none;background:rgba(10,12,16,.92);border:1px solid #2f3848;border-radius:6px;padding:5px 8px;font-size:12px;white-space:nowrap;display:none}
+aside{width:270px;border-left:1px solid #232a36;background:#12161d;padding:12px;overflow:auto;display:flex;flex-direction:column;gap:14px}
+aside h3{font-size:13px;color:#9aa4b5;margin-bottom:6px;font-weight:500}
+.tools{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.hint{font-size:12px;color:#7f8a9c;margin-top:6px;line-height:1.5}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:12.5px}
+.kv span:nth-child(odd){color:#8e98aa}
+#towns{list-style:none;font-size:12.5px}
+#towns li{display:flex;justify-content:space-between;padding:3px 0;border-top:1px solid #1d232d;cursor:pointer}
+#towns li:hover{color:#4ecdc4}
+#towns li.dead{color:#666}
+.legend{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;font-size:12px;color:#aab}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+canvas#chart{width:100%;height:60px;background:#0d1015;border-radius:6px}
+@media (max-width:800px){
+  main{flex-direction:column}
+  aside{width:auto;border-left:0;border-top:1px solid #232a36;max-height:40%}
+  #chron{width:220px;max-height:35%}
+}
+</style>
+</head>
+<body>
+<div id="app">
+<header>
+  <h1><a href="/">生长城市</a></h1>
+  <span class="stat">第<b id="sYear">0</b> 年</span>
+  <span class="stat">人口<b id="sPop">0</b></span>
+  <span class="stat">聚落<b id="sTowns">0</b></span>
+  <span class="grow"></span>
+  <button id="bPlay">⏸ 暂停</button>
+  <span class="stat">速度</span><input type="range" id="speed" min="1" max="40" value="8"><span class="stat" id="sSpeed">8 年/秒</span>
+  <input type="text" id="seed" title="种子">
+  <button id="bSeed">新世界</button>
+  <button id="bToday">今日世界</button>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="view"></canvas>
+    <div id="chron"><h3><span>📜 编年史</span><span id="chronToggle">收起</span></h3><ul id="chronList"></ul></div>
+    <div id="tip"></div>
+  </div>
+  <aside>
+    <section>
+      <h3>你的手</h3>
+      <div class="tools">
+        <button data-tool="look" class="on">👁 观察</button>
+        <button data-tool="river">🌊 挖河</button>
+        <button data-tool="ore">⛏ 放矿</button>
+        <button data-tool="found">🏕 建村</button>
+      </div>
+      <div class="hint" id="toolHint">移动鼠标查看地块，点击聚落查看详情。</div>
+    </section>
+    <section>
+      <h3>人口曲线</h3>
+      <canvas id="chart" width="500" height="120"></canvas>
+    </section>
+    <section id="selBox" style="display:none">
+      <h3 id="selName">—</h3>
+      <div class="kv" id="selKv"></div>
+    </section>
+    <section>
+      <h3>聚落</h3>
+      <ul id="towns"></ul>
+    </section>
+    <section>
+      <h3>图例</h3>
+      <div class="legend">
+        <span><i style="background:#cdb98a"></i>道路</span><span><i style="background:#8a5a32"></i>桥</span>
+        <span><i style="background:#c9a06a"></i>民居</span><span><i style="background:#d9485a"></i>高密度</span>
+        <span><i style="background:#d6c75a"></i>农田</span><span><i style="background:#ffd23f"></i>市场</span>
+        <span><i style="background:#9a7fc0"></i>工坊</span><span><i style="background:#3d3d44"></i>矿场</span>
+        <span><i style="background:#3fb6d8"></i>港口</span><span><i style="background:#6e5f52"></i>废墟</span>
+        <span><i style="background:#c06cff"></i>矿脉</span><span><i style="background:#2e5e3a"></i>森林</span>
+      </div>
+    </section>
+  </aside>
+</main>
+</div>
+<script>
+// ===== 生长城市 · 核心模拟（无 DOM，可在 Node 中运行） =====
+const City = (function () {
+    'use strict';
+    const W = 160, H = 100, N = W * H;
+    const B = { NONE: 0, ROAD: 1, HOUSE: 2, FARM: 3, MARKET: 4, WORKSHOP: 5, MINE: 6, PORT: 7, RUIN: 8, BRIDGE: 9 };
+    const BNAME = ['空地', '道路', '民居', '农田', '市场', '工坊', '矿场', '港口', '废墟', '桥'];
+    const SEA = 1, RIVER = 2;
+
+    // ---------- 随机数 ----------
+    function hashSeed(str) {
+        let h = 1779033703 ^ str.length;
+        for (let i = 0; i < str.length; i++) { h = Math.imul(h ^ str.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
+        h = Math.imul(h ^ (h >>> 16), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909);
+        return (h ^= h >>> 16) >>> 0;
+    }
+    function mulberry32(a) {
+        return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    }
+
+    // ---------- 噪声 ----------
+    function makeNoise(rng) {
+        const P = 64, g = new Float32Array(P * P);
+        for (let i = 0; i < g.length; i++) g[i] = rng();
+        const sm = t => t * t * (3 - 2 * t);
+        return function (x, y) {
+            const xi = Math.floor(x), yi = Math.floor(y), xf = sm(x - xi), yf = sm(y - yi);
+            const v = (a, b) => g[((b % P + P) % P) * P + ((a % P + P) % P)];
+            const a = v(xi, yi), b = v(xi + 1, yi), c = v(xi, yi + 1), d = v(xi + 1, yi + 1);
+            return a + (b - a) * xf + (c - a) * yf + (a - b - c + d) * xf * yf;
+        };
+    }
+    function fbm(n, x, y, oct) { let s = 0, amp = 1, f = 1, tot = 0; for (let o = 0; o < oct; o++) { s += n(x * f, y * f) * amp; tot += amp; amp *= 0.5; f *= 2; } return s / tot; }
+
+    const idx = (x, y) => y * W + x;
+    const inb = (x, y) => x >= 0 && y >= 0 && x < W && y < H;
+    const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const N8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+
+    // ---------- 名字 ----------
+    const NA = ['青', '白', '石', '柳', '松', '杏', '云', '金', '铁', '清', '桃', '枫', '溪', '鹿', '雁', '梅', '竹', '槐', '凤', '龙', '黄', '红', '安', '平', '长', '永', '新', '东', '西', '南', '北', '明'];
+    const NB = ['石', '桥', '湾', '口', '川', '原', '岭', '泉', '林', '坪', '塘', '浦', '冈', '渡', '谷', '台', '河', '庄', '阳', '洲'];
+    function makeName(rng, used) {
+        for (let k = 0; k < 50; k++) { const n = NA[Math.floor(rng() * NA.length)] + NB[Math.floor(rng() * NB.length)]; if (!used.has(n)) { used.add(n); return n; } }
+        return '无名' + used.size;
+    }
+    const SUFFIX = { village: '村', town: '镇', city: '城', abandoned: '（废）' };
+    function fullName(s) { return s.name + (s.status === 'abandoned' ? '村（废）' : SUFFIX[s.status]); }
+
+    // ---------- 地形 ----------
+    function genTerrain(w) {
+        const rng = w.rng, n1 = makeNoise(rng), n2 = makeNoise(rng);
+        const coast = Math.floor(rng() * 4);          // 哪一边是海
+        const hasSea = rng() < 0.8;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            let h = fbm(n1, x / 28, y / 28, 5);
+            h = (h - 0.5) * 1.6 + 0.55;
+            if (hasSea) {
+                const d = [x / W, 1 - x / W, y / H, 1 - y / H][coast];
+                h -= Math.max(0, 0.28 - d) * 2.2;
+            }
+            w.height[idx(x, y)] = h;
+            w.forest[idx(x, y)] = fbm(n2, x / 14, y / 14, 3) > 0.58 ? 1 : 0;
+        }
+        for (let i = 0; i < N; i++) if (w.height[i] < 0.3) w.water[i] = SEA;
+        // 河流：从高处顺坡流下
+        const nRiv = 2 + Math.floor(rng() * 3);
+        for (let r = 0; r < nRiv; r++) {
+            let best = -1;
+            for (let k = 0; k < 200; k++) { const i = Math.floor(rng() * N); if (!w.water[i] && w.height[i] > 0.66 && (best < 0 || w.height[i] > w.height[best])) best = i; }
+            if (best >= 0) carveRiver(w, best % W, Math.floor(best / W), rng);
+        }
+        // 矿脉
+        const nOre = 4 + Math.floor(rng() * 4);
+        for (let k = 0, made = 0; k < 400 && made < nOre; k++) {
+            const x = Math.floor(rng() * W), y = Math.floor(rng() * H), i = idx(x, y);
+            if (w.water[i] || w.height[i] < 0.55 || w.height[i] > 0.85) continue;
+            placeOre(w, x, y, 2 + Math.floor(rng() * 2), 160 + Math.floor(rng() * 95)); made++;
+        }
+        recomputeField(w);
+    }
+    function carveRiver(w, x, y, rng) {
+        for (let step = 0; step < 500; step++) {
+            const i = idx(x, y);
+            if (w.water[i] === SEA) return;
+            w.water[i] = RIVER; w.forest[i] = 0; w.ore[i] = 0;
+            let bx = -1, by = -1, bh = Infinity;
+            for (const [dx, dy] of N4) {
+                const nx = x + dx, ny = y + dy;
+                if (!inb(nx, ny)) return;
+                const j = idx(nx, ny);
+                if (w.water[j] === RIVER) continue;
+                const h = w.height[j] + rng() * 0.02;
+                if (h < bh) { bh = h; bx = nx; by = ny; }
+            }
+            if (bx < 0) return;
+            if (bh > w.height[i]) w.height[idx(bx, by)] = w.height[i] - 0.001;   // 冲开小洼地
+            x = bx; y = by;
+        }
+    }
+    function placeOre(w, cx, cy, r, amt) {
+        for (let y = cy - r; y <= cy + r; y++) for (let x = cx - r; x <= cx + r; x++) {
+            if (!inb(x, y)) continue;
+            const i = idx(x, y);
+            if (w.water[i] || (x - cx) ** 2 + (y - cy) ** 2 > r * r + 1) continue;
+            w.ore[i] = Math.min(255, Math.max(w.ore[i], amt - ((x - cx) ** 2 + (y - cy) ** 2) * 8));
+        }
+    }
+    // 离水距离、肥力
+    function recomputeField(w) {
+        const d = w.distWater; d.fill(255);
+        const q = [];
+        for (let i = 0; i < N; i++) if (w.water[i]) { d[i] = 0; q.push(i); }
+        for (let h = 0; h < q.length; h++) {
+            const i = q[h], x = i % W, y = (i / W) | 0;
+            for (const [dx, dy] of N4) { const nx = x + dx, ny = y + dy; if (!inb(nx, ny)) continue; const j = idx(nx, ny); if (d[j] > d[i] + 1) { d[j] = d[i] + 1; q.push(j); } }
+        }
+        for (let i = 0; i < N; i++) {
+            const h = w.height[i];
+            let f = Math.max(0, 1 - d[i] / 14) * 0.65 + Math.max(0, 0.8 - h) * 0.6;
+            if (h > 0.75) f *= 0.3;
+            w.fert[i] = Math.min(1, f);
+        }
+    }
+
+    // ---------- 世界 ----------
+    function createWorld(seed) {
+        const w = {
+            seed, rng: mulberry32(hashSeed(String(seed))), year: 0,
+            height: new Float32Array(N), water: new Uint8Array(N), forest: new Uint8Array(N), ore: new Uint8Array(N),
+            fert: new Float32Array(N), distWater: new Uint8Array(N),
+            build: new Uint8Array(N), level: new Uint8Array(N), owner: new Int16Array(N).fill(-1), ruinAge: new Uint16Array(N),
+            access: new Uint16Array(N).fill(9999),
+            towns: [], used: new Set(), events: [], history: [], stats: {}
+        };
+        genTerrain(w);
+        // 第一批村庄
+        const n0 = 1 + Math.floor(w.rng() * 2);
+        for (let k = 0; k < n0; k++) { const s = bestSite(w, 400); if (s >= 0) found(w, s % W, (s / W) | 0); }
+        computeAccess(w); stats(w);
+        return w;
+    }
+    function log(w, type, text, x, y, major) { w.events.push({ t: w.year, type, text, x, y, major: !!major }); if (w.events.length > 400) w.events.shift(); }
+
+    const buildable = (w, i) => !w.water[i] && w.height[i] < 0.8 && (w.build[i] === B.NONE || w.build[i] === B.RUIN);
+
+    function siteScore(w, i) {
+        if (!buildable(w, i) || w.build[i] === B.RUIN) return -1;
+        const x = i % W, y = (i / W) | 0;
+        if (x < 4 || y < 4 || x > W - 5 || y > H - 5) return -1;
+        const dw = w.distWater[i];
+        if (dw < 1 || dw > 6) return -1;
+        for (const t of w.towns) if (t.status !== 'abandoned' && Math.hypot(t.x - x, t.y - y) < 24) return -1;
+        let s = w.fert[i] * 2 + (dw <= 2 ? 0.6 : 0) - Math.abs(w.height[i] - 0.45);
+        let ore = 0;
+        for (let k = 0; k < 30; k++) { const j = idx(Math.min(W - 1, Math.max(0, x + Math.round((w.rng() - 0.5) * 16))), Math.min(H - 1, Math.max(0, y + Math.round((w.rng() - 0.5) * 16)))); if (w.ore[j]) ore++; }
+        s += Math.min(ore, 4) * 0.12;
+        for (const [dx, dy] of N8) { const nx = x + dx * 3, ny = y + dy * 3; if (inb(nx, ny) && w.water[idx(nx, ny)] === SEA) { s += 0.25; break; } }
+        return s;
+    }
+    function bestSite(w, tries) {
+        let best = -1, bs = 0;
+        for (let k = 0; k < tries; k++) { const i = Math.floor(w.rng() * N), s = siteScore(w, i); if (s > bs) { bs = s; best = i; } }
+        return best;
+    }
+    function setB(w, i, b, owner, lvl) { w.build[i] = b; w.level[i] = lvl || 1; w.owner[i] = owner; w.ruinAge[i] = 0; if (b !== B.NONE) w.forest[i] = 0; }
+
+    function found(w, x, y, byUser) {
+        const t = { id: w.towns.length, name: makeName(w.rng, w.used), x, y, founded: w.year, pop: 12, peak: 12, status: 'village', roads: [], bridges: 0, hasPort: false };
+        w.towns.push(t);
+        setB(w, idx(x, y), B.MARKET, t.id);
+        // 十字小街
+        for (const [dx, dy] of N4) for (let k = 1; k <= 3; k++) { const nx = x + dx * k, ny = y + dy * k; if (!inb(nx, ny)) break; const j = idx(nx, ny); if (!buildable(w, j)) break; setB(w, j, B.ROAD, t.id); t.roads.push(j); }
+        for (let k = 0; k < 3; k++) placeType(w, t, B.HOUSE);
+        placeType(w, t, B.FARM);
+        if (w.year > 0) log(w, 'found', (byUser ? '移民在你选定的地方建立了 ' : '拓荒者建立了 ') + fullName(t), x, y, true);
+        else log(w, 'found', fullName(t) + ' 在' + (w.distWater[idx(x, y)] <= 2 ? '河畔' : '原野上') + '建立', x, y, true);
+        // 连到最近的城镇
+        let near = null, nd = Infinity;
+        for (const o of w.towns) if (o !== t && o.status !== 'abandoned') { const d = Math.hypot(o.x - x, o.y - y); if (d < nd) { nd = d; near = o; } }
+        if (near && nd < 90) { if (buildRoad(w, t, idx(x, y), idx(near.x, near.y), true)) log(w, 'road', fullName(t) + ' 与 ' + fullName(near) + ' 之间修通了大道', (x + near.x) / 2, (y + near.y) / 2, false); }
+        return t;
+    }
+
+    // ---------- 道路（Dijkstra，地形代价） ----------
+    function stepCost(w, j, t, allowBridge) {
+        if (w.water[j] === SEA) return Infinity;
+        if (w.water[j] === RIVER) return allowBridge ? 14 : Infinity;
+        const b = w.build[j];
+        if (b === B.ROAD || b === B.BRIDGE) return 0.5;
+        if (b !== B.NONE && b !== B.RUIN && b !== B.FARM) return Infinity;
+        let c = 1 + Math.max(0, w.height[j] - 0.55) * 18 + (w.forest[j] ? 1.2 : 0) + (b === B.FARM ? 2 : 0);
+        return c;
+    }
+    function buildRoad(w, t, from, to, allowBridge, maxCost) {
+        const dist = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1);
+        const heap = [];
+        const push = (i, d, g) => { heap.push([d, i, g]); let k = heap.length - 1; while (k > 0) { const p = (k - 1) >> 1; if (heap[p][0] <= heap[k][0]) break; [heap[p], heap[k]] = [heap[k], heap[p]]; k = p; } };
+        const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let k = 0; for (;;) { const l = 2 * k + 1, r = l + 1; let m = k; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === k) break; [heap[m], heap[k]] = [heap[k], heap[m]]; k = m; } } return top; };
+        dist[from] = 0; push(from, 0, 0);
+        const tx = to % W, ty = (to / W) | 0;
+        while (heap.length) {
+            const [, i, d] = pop();
+            if (d > dist[i]) continue;
+            if (i === to) break;
+            if (maxCost && d > maxCost) return false;
+            const x = i % W, y = (i / W) | 0;
+            for (const [dx, dy] of N4) {
+                const nx = x + dx, ny = y + dy; if (!inb(nx, ny)) continue;
+                const j = idx(nx, ny);
+                const c = j === to ? 1 : stepCost(w, j, t, allowBridge);
+                if (c === Infinity) continue;
+                const nd = d + c;
+                if (nd < dist[j]) { dist[j] = nd; prev[j] = i; push(j, nd + Math.hypot(nx - tx, ny - ty) * 0.5, nd); }
+            }
+        }
+        if (prev[to] < 0) return false;
+        let i = prev[to], newBridge = false;
+        while (i >= 0 && i !== from) {
+            if (w.water[i] === RIVER) { if (w.build[i] !== B.BRIDGE) { setB(w, i, B.BRIDGE, t.id); newBridge = true; t.roads.push(i); } }
+            else if (w.build[i] !== B.ROAD) { setB(w, i, B.ROAD, w.owner[i] >= 0 && w.build[i] !== B.NONE ? w.owner[i] : t.id); t.roads.push(i); }
+            i = prev[i];
+        }
+        if (newBridge) { t.bridges++; if (t.bridges === 1) log(w, 'bridge', fullName(t) + ' 架起了第一座桥', to % W, (to / W) | 0, false); }
+        return true;
+    }
+
+    // 距市场的道路距离（多源 BFS），决定地价
+    function computeAccess(w) {
+        const a = w.access; a.fill(9999);
+        const q = [];
+        for (let i = 0; i < N; i++) if (w.build[i] === B.MARKET || w.build[i] === B.PORT) { a[i] = 0; q.push(i); }
+        for (let h = 0; h < q.length; h++) {
+            const i = q[h], x = i % W, y = (i / W) | 0;
+            for (const [dx, dy] of N4) {
+                const nx = x + dx, ny = y + dy; if (!inb(nx, ny)) continue;
+                const j = idx(nx, ny), b = w.build[j];
+                if ((b === B.ROAD || b === B.BRIDGE || b === B.MARKET || b === B.PORT) && a[j] > a[i] + 1) { a[j] = a[i] + 1; q.push(j); }
+            }
+        }
+    }
+    function nearRoadAccess(w, x, y, r) {
+        let best = 9999;
+        for (let yy = y - r; yy <= y + r; yy++) for (let xx = x - r; xx <= x + r; xx++) {
+            if (!inb(xx, yy)) continue; const j = idx(xx, yy), b = w.build[j];
+            if (b === B.ROAD || b === B.BRIDGE || b === B.MARKET) best = Math.min(best, w.access[j] + Math.abs(xx - x) + Math.abs(yy - y));
+        }
+        return best;
+    }
+    function countAround(w, x, y, r, type) {
+        let c = 0;
+        for (let yy = y - r; yy <= y + r; yy++) for (let xx = x - r; xx <= x + r; xx++) if (inb(xx, yy) && w.build[idx(xx, yy)] === type) c++;
+        return c;
+    }
+
+    // ---------- 选址 ----------
+    function scoreFor(w, t, i, type) {
+        const x = i % W, y = (i / W) | 0;
+        if (!buildable(w, i)) return -Infinity;
+        const r = type === B.FARM ? 3 : type === B.MINE ? 4 : 1;
+        const acc = nearRoadAccess(w, x, y, r);
+        if (acc >= 9999) return -Infinity;
+        const ruin = w.build[i] === B.RUIN ? 0.4 : 0;
+        const slope = Math.max(0, w.height[i] - 0.6) * 4;
+        switch (type) {
+            case B.HOUSE: return 2 - acc * 0.06 - slope - countAround(w, x, y, 2, B.WORKSHOP) * 0.25 - countAround(w, x, y, 3, B.MINE) * 0.3 + (w.distWater[i] <= 2 ? 0.2 : 0) + ruin + countAround(w, x, y, 1, B.HOUSE) * 0.08;
+            case B.FARM: return w.fert[i] * 3 - slope * 2 + Math.min(acc, 30) * 0.02 - countAround(w, x, y, 1, B.HOUSE) * 0.15 - (w.forest[i] ? 0.4 : 0);
+            case B.WORKSHOP: return 1.5 - acc * 0.03 + countAround(w, x, y, 4, B.MINE) * 0.4 + (w.distWater[i] <= 1 ? 0.5 : 0) - countAround(w, x, y, 1, B.HOUSE) * 0.1 + ruin;
+            case B.MARKET: { if (acc < 9) return -Infinity; return 1 + acc * 0.05 + countAround(w, x, y, 3, B.HOUSE) * 0.15 - slope; }
+            case B.MINE: return w.ore[i] ? w.ore[i] / 80 - acc * 0.02 : -Infinity;
+            case B.PORT: { let sea = false; for (const [dx, dy] of N4) { const nx = x + dx, ny = y + dy; if (inb(nx, ny) && w.water[idx(nx, ny)] === SEA) sea = true; } return sea ? 3 - acc * 0.05 : -Infinity; }
+        }
+        return -Infinity;
+    }
+    function placeType(w, t, type) {
+        const rng = w.rng, R = type === B.FARM ? 3 : type === B.MINE ? 4 : type === B.PORT ? 2 : 1;
+        if (!t.roads.length) return false;
+        let best = -1, bs = -Infinity;
+        for (let k = 0; k < 36; k++) {
+            const ri = t.roads[Math.floor(rng() * t.roads.length)];
+            const x = ri % W + Math.round((rng() * 2 - 1) * R), y = ((ri / W) | 0) + Math.round((rng() * 2 - 1) * R);
+            if (!inb(x, y)) continue;
+            const i = idx(x, y), s = scoreFor(w, t, i, type) + rng() * 0.3;
+            if (s > bs) { bs = s; best = i; }
+        }
+        if (best < 0 || bs === -Infinity) return false;
+        setB(w, best, type, t.id);
+        // 不贴路的建筑修一条小路接上
+        const x = best % W, y = (best / W) | 0;
+        if (type !== B.FARM && nearRoadAccess(w, x, y, 1) >= 9999) {
+            let tgt = -1, td = Infinity;
+            for (let yy = y - 5; yy <= y + 5; yy++) for (let xx = x - 5; xx <= x + 5; xx++) { if (!inb(xx, yy)) continue; const j = idx(xx, yy); if ((w.build[j] === B.ROAD) && Math.abs(xx - x) + Math.abs(yy - y) < td) { td = Math.abs(xx - x) + Math.abs(yy - y); tgt = j; } }
+            if (tgt >= 0) buildRoad(w, t, best, tgt, false, 30);
+        }
+        return true;
+    }
+    // 道路向外延伸：沿一个方向修 3–6 格，长出街区
+    function extendRoad(w, t) {
+        const rng = w.rng;
+        for (let k = 0; k < 12; k++) {
+            const ri = t.roads[Math.floor(rng() * t.roads.length)];
+            if (w.build[ri] !== B.ROAD) continue;
+            let x = ri % W, y = (ri / W) | 0;
+            const [dx, dy] = N4[Math.floor(rng() * 4)];
+            const len = 3 + Math.floor(rng() * 4);
+            const cells = [];
+            let ok = true;
+            for (let s = 1; s <= len; s++) {
+                const nx = x + dx * s, ny = y + dy * s;
+                if (!inb(nx, ny)) { ok = false; break; }
+                const j = idx(nx, ny);
+                if (w.water[j] || w.height[j] > 0.74) { ok = false; break; }
+                const b = w.build[j];
+                if (b === B.ROAD) { if (s === 1) { ok = false; } break; }
+                if (b !== B.NONE && b !== B.RUIN && b !== B.FARM) { ok = false; break; }
+                cells.push(j);
+            }
+            if (!ok || cells.length < 2) continue;
+            // 与平行道路保持两格间距，形成街区
+            const px = dy !== 0 ? 1 : 0, py = dx !== 0 ? 1 : 0;
+            let tooClose = 0;
+            for (const j of cells) { const cx = j % W, cy = (j / W) | 0; for (const s of [-1, 1]) { const nx = cx + px * s, ny = cy + py * s; if (inb(nx, ny) && w.build[idx(nx, ny)] === B.ROAD) tooClose++; } }
+            if (tooClose > 1) continue;
+            for (const j of cells) { setB(w, j, B.ROAD, t.id); t.roads.push(j); }
+            return true;
+        }
+        return false;
+    }
+
+    // ---------- 每年 ----------
+    function townCounts(w) {
+        const c = w.towns.map(() => ({ house: 0, housing: 0, food: 0, jobs: 0, farm: 0, market: 0, workshop: 0, mine: 0, port: 0, cells: 0 }));
+        for (let i = 0; i < N; i++) {
+            const o = w.owner[i]; if (o < 0) continue;
+            const b = w.build[i], k = c[o];
+            if (b === B.HOUSE) { k.house++; k.housing += w.level[i] * 8; }
+            else if (b === B.FARM) { k.farm++; k.food += 6 + w.fert[i] * 14; k.jobs += 2; }
+            else if (b === B.MARKET) { k.market++; k.jobs += 10; k.food += 4; }
+            else if (b === B.WORKSHOP) { k.workshop++; k.jobs += 12; }
+            else if (b === B.MINE) { k.mine++; k.jobs += 10; }
+            else if (b === B.PORT) { k.port++; k.jobs += 20; k.food += 40; }
+            if (b !== B.NONE && b !== B.ROAD && b !== B.RUIN) k.cells++;
+        }
+        // 贸易：港口和道路相连的邻镇带来少量粮食
+        return c;
+    }
+    const STATUS_AT = { town: 220, city: 900 };
+    function maxLevel(t) { return t.status === 'city' ? 4 : t.status === 'town' ? 2 : 1; }
+
+    function step(w) {
+        const rng = w.rng;
+        w.year++;
+        const counts = townCounts(w);
+        for (const t of w.towns) {
+            if (t.status === 'abandoned') continue;
+            const k = counts[t.id];
+            const cap = Math.max(4, Math.min(k.housing, k.food * 1.0, k.jobs * 1.4 + 10));
+            // 人口：Logistic 增长，超出承载就下降
+            const r = 0.06;
+            let d = t.pop * r * (1 - t.pop / cap);
+            if (t.pop > cap) d = (cap - t.pop) * 0.2;
+            t.pop = Math.max(0, t.pop + d + (t.pop < cap ? rng() * 1.5 : 0));
+            t.peak = Math.max(t.peak, t.pop);
+            // 建设预算
+            let budget = 1 + Math.floor(t.pop / 200);
+            const lvlMax = maxLevel(t);
+            let guard = 0;
+            while (budget > 0 && guard++ < 12) {
+                const needHouse = t.pop > k.housing * 0.8, needFood = t.pop > k.food * 0.85, needJobs = t.pop > k.jobs * 1.2;
+                let done = false;
+                if (needFood) { done = placeType(w, t, B.FARM); if (done) k.food += 12; }
+                else if (needHouse) {
+                    // 先加密：市中心附近的民居升级
+                    if (lvlMax > 1 && rng() < 0.55) {
+                        for (let tries = 0; tries < 25 && !done; tries++) {
+                            const ri = t.roads[Math.floor(rng() * t.roads.length)], x = ri % W + Math.round(rng() * 2 - 1), y = ((ri / W) | 0) + Math.round(rng() * 2 - 1);
+                            if (!inb(x, y)) continue; const i = idx(x, y);
+                            if (w.build[i] === B.HOUSE && w.level[i] < lvlMax && w.access[ri] < 6 + w.level[i] * 4) { w.level[i]++; k.housing += 8; done = true; }
+                        }
+                    }
+                    if (!done) { done = placeType(w, t, B.HOUSE); if (done) k.housing += 8; }
+                } else if (needJobs) {
+                    const roll = rng();
+                    if (k.mine < 1 + t.pop / 250 && roll < 0.4) done = placeType(w, t, B.MINE);
+                    if (!done && t.status !== 'village' && !t.hasPort && t.pop > 300 && roll < 0.6) { done = placeType(w, t, B.PORT); if (done) { t.hasPort = true; log(w, 'port', fullName(t) + ' 建起了港口，海上贸易开始了', t.x, t.y, true); } }
+                    if (!done && k.market < 1 + t.pop / 300 && roll < 0.75) done = placeType(w, t, B.MARKET);
+                    if (!done) done = placeType(w, t, B.WORKSHOP);
+                    if (done) k.jobs += 10;
+                }
+                if (!needFood && !needHouse && !needJobs) break;
+                if (!done) extendRoad(w, t);
+                budget--;
+            }
+            if (rng() < 0.05 + t.pop / 8000) extendRoad(w, t);
+            if (t.pop > 150 * (t.bridges + 1) * (t.bridges + 1) && rng() < 0.08) bridgeOut(w, t);
+            // 等级变化
+            const prev = t.status;
+            if (t.pop >= STATUS_AT.city) t.status = 'city';
+            else if (t.pop >= STATUS_AT.town) t.status = prev === 'city' && t.pop > STATUS_AT.city * 0.7 ? 'city' : 'town';
+            else if (prev !== 'village' && t.pop < STATUS_AT.town * 0.7) t.status = 'village';
+            if (t.status !== prev) {
+                const up = ['village', 'town', 'city'].indexOf(t.status) > ['village', 'town', 'city'].indexOf(prev);
+                log(w, up ? 'grow' : 'shrink', up ? t.name + SUFFIX[prev] + ' 发展成了 ' + fullName(t) + '（' + Math.round(t.pop) + ' 人）' : fullName(t) + ' 衰落了（' + Math.round(t.pop) + ' 人）', t.x, t.y, true);
+            }
+            // 人口太少就放弃一些房子
+            if (t.pop < k.housing * 0.45 && k.house > 3) abandonHouse(w, t);
+            if (t.pop < 3 && w.year - t.founded > 20) abandonTown(w, t, '人口散尽');
+        }
+        events(w);
+        mining(w);
+        ruins(w);
+        // 开拓新村
+        const alive = w.towns.filter(t => t.status !== 'abandoned');
+        const total = alive.reduce((s, t) => s + t.pop, 0);
+        if (alive.length < 14 && rng() < 0.012 + total / 60000) { const s = bestSite(w, 300); if (s >= 0) found(w, s % W, (s / W) | 0); }
+        if (w.year % 3 === 0) computeAccess(w);
+        stats(w);
+    }
+    function bridgeOut(w, t) {
+        // 往河对岸延伸：找附近的河，修路过去
+        for (let k = 0; k < 20; k++) {
+            const ri = t.roads[Math.floor(w.rng() * t.roads.length)], x = ri % W, y = (ri / W) | 0;
+            for (const [dx, dy] of N4) {
+                let s = 1; while (s < 8 && inb(x + dx * s, y + dy * s) && w.water[idx(x + dx * s, y + dy * s)] !== RIVER) s++;
+                if (s >= 8 || !inb(x + dx * s, y + dy * s)) continue;
+                let e = s; while (e < s + 4 && inb(x + dx * e, y + dy * e) && w.water[idx(x + dx * e, y + dy * e)] === RIVER) e++;
+                const ex = x + dx * (e + 1), ey = y + dy * (e + 1);
+                if (e >= s + 4 || !inb(ex, ey) || !buildable(w, idx(ex, ey))) continue;
+                if (buildRoad(w, t, ri, idx(ex, ey), true, 80)) return true;
+            }
+        }
+        return false;
+    }
+    function toRuin(w, i) { w.build[i] = B.RUIN; w.level[i] = 1; w.ruinAge[i] = 0; }
+    function abandonHouse(w, t) {
+        // 离市场最远的房子先被遗弃
+        let worst = -1, wa = -1;
+        for (let k = 0; k < 30; k++) { const ri = t.roads[Math.floor(w.rng() * t.roads.length)], x = ri % W + Math.round(w.rng() * 2 - 1), y = ((ri / W) | 0) + Math.round(w.rng() * 2 - 1); if (!inb(x, y)) continue; const i = idx(x, y); if (w.build[i] === B.HOUSE && w.owner[i] === t.id && w.access[ri] > wa) { wa = w.access[ri]; worst = i; } }
+        if (worst >= 0) { if (w.level[worst] > 1) w.level[worst]--; else toRuin(w, worst); }
+    }
+    function abandonTown(w, t, why) {
+        t.status = 'abandoned'; t.pop = 0;
+        for (let i = 0; i < N; i++) if (w.owner[i] === t.id && w.build[i] !== B.ROAD && w.build[i] !== B.BRIDGE && w.build[i] !== B.NONE) { if (w.build[i] === B.FARM) setB(w, i, B.NONE, -1); else toRuin(w, i); }
+        log(w, 'abandon', t.name + ' 被废弃了（' + why + '），只留下废墟', t.x, t.y, true);
+    }
+    function burn(w, start, max) {
+        const q = [start], seen = new Set([start]); let n = 0;
+        for (let h = 0; h < q.length && n < max; h++) {
+            const i = q[h]; toRuin(w, i); n++;
+            const x = i % W, y = (i / W) | 0;
+            for (const [dx, dy] of N8) { const nx = x + dx, ny = y + dy; if (!inb(nx, ny)) continue; const j = idx(nx, ny); if (seen.has(j)) continue; seen.add(j); if ((w.build[j] === B.HOUSE || w.build[j] === B.WORKSHOP || w.build[j] === B.MARKET) && w.rng() < 0.35 + w.level[j] * 0.1) q.push(j); }
+        }
+        return n;
+    }
+    function events(w) {
+        const rng = w.rng;
+        for (const t of w.towns) {
+            if (t.status === 'abandoned') continue;
+            // 洪水
+            if (rng() < 0.006) {
+                let lost = 0;
+                for (let i = 0; i < N; i++) if (w.owner[i] === t.id && w.distWater[i] === 1 && (w.build[i] === B.HOUSE || w.build[i] === B.FARM || w.build[i] === B.WORKSHOP) && Math.hypot(i % W - t.x, ((i / W) | 0) - t.y) < 30 && rng() < 0.6) { if (w.build[i] === B.FARM) setB(w, i, B.NONE, -1); else toRuin(w, i); lost++; }
+                if (lost >= 3) { t.pop *= 0.92; log(w, 'flood', fullName(t) + ' 遭遇洪水，' + lost + ' 处房屋和农田被冲毁', t.x, t.y, lost >= 8); }
+            }
+            // 大火：越密越容易
+            if (t.pop > 120 && rng() < 0.004 + t.pop / 120000) {
+                const cand = []; for (let i = 0; i < N; i++) if (w.owner[i] === t.id && w.build[i] === B.HOUSE && w.level[i] >= 2) cand.push(i);
+                if (cand.length) { const n = burn(w, cand[Math.floor(rng() * cand.length)], 40); t.pop *= Math.max(0.6, 1 - n * 0.01); if (n >= 3) log(w, 'fire', fullName(t) + ' 发生大火，烧毁 ' + n + ' 座建筑', t.x, t.y, n >= 10); }
+            }
+            // 瘟疫
+            if (t.pop > 400 && rng() < 0.004) { const loss = 0.15 + rng() * 0.2; t.pop *= 1 - loss; log(w, 'plague', fullName(t) + ' 爆发瘟疫，人口减少 ' + Math.round(loss * 100) + '%', t.x, t.y, true); }
+        }
+    }
+    function mining(w) {
+        for (let i = 0; i < N; i++) {
+            if (w.build[i] !== B.MINE) continue;
+            const d = 1 + (w.rng() < 0.5 ? 1 : 0);
+            w.ore[i] = Math.max(0, w.ore[i] - d);
+            if (!w.ore[i]) {
+                const t = w.towns[w.owner[i]];
+                toRuin(w, i);
+                if (t) {
+                    let other = 0; for (let j = 0; j < N; j++) if (w.build[j] === B.MINE && w.owner[j] === t.id) other++;
+                    log(w, 'deplete', fullName(t) + ' 的一处矿脉枯竭了' + (other ? '' : '，这是它最后一座矿'), i % W, (i / W) | 0, !other);
+                    // 工坊失去原料，部分倒闭
+                    for (let j = 0; j < N; j++) if (w.build[j] === B.WORKSHOP && w.owner[j] === t.id && w.rng() < (other ? 0.15 : 0.45)) toRuin(w, j);
+                }
+            }
+        }
+    }
+    function ruins(w) {
+        for (let i = 0; i < N; i++) if (w.build[i] === B.RUIN) { w.ruinAge[i]++; if (w.ruinAge[i] > 60 + (i % 40)) { w.build[i] = B.NONE; w.owner[i] = -1; if (w.fert[i] > 0.5 && (i % 3 === 0)) w.forest[i] = 1; } }
+    }
+    function stats(w) {
+        const s = { pop: 0, towns: 0, cities: 0, villages: 0, buildings: 0, roads: 0, ruins: 0, bridges: 0 };
+        for (const t of w.towns) { if (t.status === 'abandoned') continue; s.towns++; s.pop += t.pop; if (t.status === 'city') s.cities++; else if (t.status === 'village') s.villages++; }
+        for (let i = 0; i < N; i++) { const b = w.build[i]; if (b === B.ROAD) s.roads++; else if (b === B.BRIDGE) s.bridges++; else if (b === B.RUIN) s.ruins++; else if (b) s.buildings++; }
+        s.pop = Math.round(s.pop);
+        w.stats = s;
+        w.history.push({ y: w.year, pop: s.pop });
+        if (w.history.length > 600) w.history.shift();
+    }
+
+    // ---------- 玩家操作 ----------
+    function userOre(w, x, y) { if (!inb(x, y) || w.water[idx(x, y)]) return false; placeOre(w, x, y, 2, 230); log(w, 'user', '在 (' + x + ', ' + y + ') 发现了一处新矿脉', x, y, false); return true; }
+    function userRiver(w, cells) {
+        let n = 0;
+        for (const i of cells) { if (w.water[i] || w.build[i] === B.MARKET || w.build[i] === B.PORT) continue; if (w.build[i] === B.ROAD) { w.build[i] = B.BRIDGE; } else if (w.build[i]) { setB(w, i, B.NONE, -1); } w.water[i] = RIVER; w.ore[i] = 0; w.forest[i] = 0; n++; }
+        if (n) { recomputeField(w); computeAccess(w); const c = cells[Math.floor(cells.length / 2)]; log(w, 'user', '一条新的水道被挖开了（' + n + ' 格）', c % W, (c / W) | 0, false); }
+        return n;
+    }
+    function userFound(w, x, y) { if (!inb(x, y)) return null; const i = idx(x, y); if (!buildable(w, i) || w.build[i]) return null; for (const t of w.towns) if (t.status !== 'abandoned' && Math.hypot(t.x - x, t.y - y) < 10) return null; const t = found(w, x, y, true); computeAccess(w); return t; }
+
+    function townAt(w, x, y) { if (!inb(x, y)) return null; const o = w.owner[idx(x, y)]; if (o >= 0) return w.towns[o]; let best = null, bd = 6; for (const t of w.towns) { const d = Math.hypot(t.x - x, t.y - y); if (d < bd) { bd = d; best = t; } } return best; }
+
+    return { W, H, N, B, BNAME, SEA, RIVER, idx, inb, hashSeed, mulberry32, createWorld, step, fullName, userOre, userRiver, userFound, townAt, recomputeField, computeAccess };
+})();
+if (typeof module !== 'undefined') module.exports = City;
+
+
+(function () {
+    'use strict';
+    const { W, H, N, B, idx, inb } = City;
+    const view = document.getElementById('view'), ctx = view.getContext('2d');
+    const off = document.createElement('canvas'); off.width = W; off.height = H;
+    const octx = off.getContext('2d'), img = octx.createImageData(W, H);
+    const $ = id => document.getElementById(id);
+
+    let world, playing = true, speed = 8, acc = 0, last = performance.now(), cell = 6, tool = 'look', selected = null, hover = -1, flash = null, dirty = true;
+    let terrainRGB = new Uint8Array(N * 3);
+
+    function today() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+    function start(seed) {
+        world = City.createWorld(seed); selected = null; flash = null;
+        $('seed').value = seed;
+        const u = new URL(location.href); u.searchParams.set('seed', seed); history.replaceState(null, '', u);
+        buildTerrain(); dirty = true; refreshPanels(true);
+    }
+
+    // ---------- 颜色 ----------
+    function mix(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+    function buildTerrain() {
+        for (let i = 0; i < N; i++) {
+            const h = world.height[i]; let c;
+            if (world.water[i] === City.SEA) c = mix([14, 40, 78], [36, 92, 140], Math.max(0, Math.min(1, (h - 0.0) / 0.3)));
+            else if (world.water[i] === City.RIVER) c = [52, 120, 180];
+            else if (h > 0.8) c = mix([120, 116, 112], [235, 235, 240], Math.min(1, (h - 0.8) / 0.25));
+            else if (h > 0.62) c = mix([118, 128, 84], [128, 112, 86], (h - 0.62) / 0.18);
+            else { c = mix([170, 168, 100], [78, 140, 70], world.fert[i]); if (h < 0.34) c = mix(c, [205, 192, 140], 0.6); }
+            if (world.forest[i] && !world.water[i] && h <= 0.8) c = mix(c, [36, 84, 48], 0.75);
+            const x = i % W, y = (i / W) | 0, n = ((x * 73 + y * 37) % 7) / 7 * 8 - 4;
+            terrainRGB[i * 3] = c[0] + n; terrainRGB[i * 3 + 1] = c[1] + n; terrainRGB[i * 3 + 2] = c[2] + n;
+        }
+    }
+    const HOUSE = [[201, 160, 106], [214, 120, 80], [217, 72, 90], [235, 225, 245]];
+    function paint() {
+        const d = img.data, wd = world;
+        for (let i = 0; i < N; i++) {
+            let r = terrainRGB[i * 3], g = terrainRGB[i * 3 + 1], b = terrainRGB[i * 3 + 2];
+            const bt = wd.build[i];
+            if (bt === B.NONE && wd.ore[i] && !wd.water[i]) { const k = wd.ore[i] / 255 * 0.7; r += (192 - r) * k; g += (108 - g) * k; b += (255 - b) * k; }
+            else if (bt === B.ROAD) { r = 205; g = 185; b = 138; }
+            else if (bt === B.BRIDGE) { r = 138; g = 90; b = 50; }
+            else if (bt === B.HOUSE) { [r, g, b] = HOUSE[Math.min(3, wd.level[i] - 1)]; }
+            else if (bt === B.FARM) { const x = i % W, s = (x + ((i / W) | 0)) % 2 ? 1 : 0.88; r = 214 * s; g = 199 * s; b = 90 * s; }
+            else if (bt === B.MARKET) { r = 255; g = 210; b = 63; }
+            else if (bt === B.WORKSHOP) { r = 154; g = 127; b = 192; }
+            else if (bt === B.MINE) { r = 61; g = 61; b = 68; }
+            else if (bt === B.PORT) { r = 63; g = 182; b = 216; }
+            else if (bt === B.RUIN) { const k = Math.min(1, wd.ruinAge[i] / 60); r = 110 + (r - 110) * k * 0.6; g = 95 + (g - 95) * k * 0.6; b = 82 + (b - 82) * k * 0.6; }
+            d[i * 4] = r; d[i * 4 + 1] = g; d[i * 4 + 2] = b; d[i * 4 + 3] = 255;
+        }
+        octx.putImageData(img, 0, 0);
+    }
+
+    // ---------- 尺寸 ----------
+    function resize() {
+        const st = $('stage'), dpr = window.devicePixelRatio || 1;
+        const s = Math.max(2, Math.min(st.clientWidth / W, st.clientHeight / H));
+        cell = s;
+        view.style.width = Math.floor(W * s) + 'px'; view.style.height = Math.floor(H * s) + 'px';
+        view.width = Math.floor(W * s * dpr); view.height = Math.floor(H * s * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        dirty = true;
+    }
+
+    function draw() {
+        paint();
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(off, 0, 0, W * cell, H * cell);
+        // 选中聚落的范围
+        if (selected) {
+            ctx.fillStyle = 'rgba(78,205,196,0.18)';
+            for (let i = 0; i < N; i++) if (world.owner[i] === selected.id && world.build[i]) ctx.fillRect((i % W) * cell, ((i / W) | 0) * cell, cell, cell);
+        }
+        // 名字
+        ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+        for (const t of world.towns) {
+            const size = t.status === 'city' ? 15 : t.status === 'town' ? 13 : 11;
+            ctx.font = (t.status === 'city' ? '600 ' : '') + size + 'px "PingFang SC","Microsoft YaHei",sans-serif';
+            const x = (t.x + 0.5) * cell, y = t.y * cell - 3;
+            ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText(City.fullName(t), x, y);
+            ctx.fillStyle = t.status === 'abandoned' ? '#9a948c' : t === selected ? '#4ecdc4' : '#fff';
+            ctx.fillText(City.fullName(t), x, y);
+        }
+        // 闪烁定位
+        if (flash) {
+            const k = (performance.now() - flash.t) / 1600;
+            if (k > 1) flash = null;
+            else { ctx.strokeStyle = 'rgba(255,230,120,' + (1 - k) + ')'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc((flash.x + 0.5) * cell, (flash.y + 0.5) * cell, 6 + k * 30, 0, Math.PI * 2); ctx.stroke(); dirty = true; }
+        }
+        if (hover >= 0 && tool !== 'look') {
+            const x = hover % W, y = (hover / W) | 0, r = tool === 'ore' ? 2 : 0;
+            ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.strokeRect((x - r) * cell, (y - r) * cell, (2 * r + 1) * cell, (2 * r + 1) * cell);
+        }
+    }
+
+    // ---------- 面板 ----------
+    let lastEventCount = -1;
+    function refreshPanels(force) {
+        const s = world.stats;
+        $('sYear').textContent = world.year; $('sPop').textContent = s.pop.toLocaleString(); $('sTowns').textContent = s.towns;
+        // 编年史
+        const major = world.events.filter(e => e.major || e.type === 'bridge' || e.type === 'user');
+        if (force || major.length !== lastEventCount || world.events.length >= 400) {
+            lastEventCount = major.length;
+            const ul = $('chronList'); ul.innerHTML = '';
+            for (const e of major.slice(-40).reverse()) {
+                const li = document.createElement('li');
+                li.innerHTML = '<span class="y">' + e.t + ' 年</span>';
+                li.appendChild(document.createTextNode(e.text));
+                li.onclick = () => { flash = { x: e.x, y: e.y, t: performance.now() }; dirty = true; };
+                ul.appendChild(li);
+            }
+        }
+        // 聚落列表
+        const ul = $('towns'); ul.innerHTML = '';
+        const list = world.towns.slice().sort((a, b) => (a.status === 'abandoned') - (b.status === 'abandoned') || b.pop - a.pop);
+        for (const t of list) {
+            const li = document.createElement('li'); if (t.status === 'abandoned') li.className = 'dead';
+            li.innerHTML = '<span></span><span>' + (t.status === 'abandoned' ? '—' : Math.round(t.pop).toLocaleString() + ' 人') + '</span>';
+            li.firstChild.textContent = City.fullName(t);
+            li.onclick = () => { select(t); flash = { x: t.x, y: t.y, t: performance.now() }; };
+            ul.appendChild(li);
+        }
+        drawChart();
+        if (selected) showSel();
+    }
+    function drawChart() {
+        const c = $('chart'), g = c.getContext('2d'), h = world.history;
+        g.clearRect(0, 0, c.width, c.height);
+        if (h.length < 2) return;
+        let max = 1; for (const p of h) max = Math.max(max, p.pop);
+        g.beginPath();
+        h.forEach((p, i) => { const x = i / (h.length - 1) * c.width, y = c.height - 6 - p.pop / max * (c.height - 14); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+        g.strokeStyle = '#4ecdc4'; g.lineWidth = 2.5; g.stroke();
+        g.fillStyle = '#7f8a9c'; g.font = '20px sans-serif'; g.fillText('峰值 ' + max.toLocaleString(), 8, 24);
+    }
+    function select(t) { selected = t; $('selBox').style.display = t ? '' : 'none'; if (t) showSel(); dirty = true; }
+    function showSel() {
+        const t = selected, k = { house: 0, farm: 0, market: 0, workshop: 0, mine: 0, port: 0, ruin: 0 };
+        for (let i = 0; i < N; i++) if (world.owner[i] === t.id) { const b = world.build[i]; if (b === B.HOUSE) k.house++; else if (b === B.FARM) k.farm++; else if (b === B.MARKET) k.market++; else if (b === B.WORKSHOP) k.workshop++; else if (b === B.MINE) k.mine++; else if (b === B.PORT) k.port++; else if (b === B.RUIN) k.ruin++; }
+        $('selName').textContent = City.fullName(t);
+        const rows = [['人口', Math.round(t.pop).toLocaleString()], ['最高人口', Math.round(t.peak).toLocaleString()], ['建立于', '第 ' + t.founded + ' 年'],
+            ['民居', k.house], ['农田', k.farm], ['市场', k.market], ['工坊', k.workshop], ['矿场', k.mine], ['港口', k.port], ['桥', t.bridges], ['废墟', k.ruin]];
+        $('selKv').innerHTML = rows.map(r => '<span>' + r[0] + '</span><span>' + r[1] + '</span>').join('');
+    }
+
+    // ---------- 交互 ----------
+    function cellAt(ev) { const r = view.getBoundingClientRect(); const x = Math.floor((ev.clientX - r.left) / cell), y = Math.floor((ev.clientY - r.top) / cell); return inb(x, y) ? idx(x, y) : -1; }
+    const TERR = i => world.water[i] === City.SEA ? '海' : world.water[i] === City.RIVER ? '河' : world.height[i] > 0.8 ? '山地' : world.height[i] > 0.62 ? '丘陵' : world.forest[i] ? '森林' : '平原';
+    function tipFor(i, ev) {
+        const tip = $('tip');
+        if (i < 0) { tip.style.display = 'none'; return; }
+        const b = world.build[i], o = world.owner[i];
+        let s = TERR(i) + ' · 肥力 ' + Math.round(world.fert[i] * 100) + '%';
+        if (world.ore[i]) s += ' · 矿 ' + world.ore[i];
+        if (b) s += '<br>' + City.BNAME[b] + (b === B.HOUSE ? ' ' + world.level[i] + ' 级' : '') + (o >= 0 && world.towns[o] ? ' · ' + City.fullName(world.towns[o]) : '');
+        tip.innerHTML = s; tip.style.display = 'block';
+        const r = $('stage').getBoundingClientRect();
+        tip.style.left = Math.min(ev.clientX - r.left + 14, r.width - 180) + 'px'; tip.style.top = (ev.clientY - r.top + 14) + 'px';
+    }
+    let digging = null;
+    view.addEventListener('pointerdown', ev => {
+        const i = cellAt(ev); if (i < 0) return;
+        const x = i % W, y = (i / W) | 0;
+        if (tool === 'look') { const t = City.townAt(world, x, y); select(t); }
+        else if (tool === 'ore') { if (City.userOre(world, x, y)) { buildTerrain(); dirty = true; refreshPanels(); } }
+        else if (tool === 'found') { const t = City.userFound(world, x, y); if (t) { select(t); refreshPanels(); } else hint('这里建不了村：要在空地上，离其他聚落至少 10 格。'); dirty = true; }
+        else if (tool === 'river') { digging = [i]; view.setPointerCapture(ev.pointerId); }
+    });
+    view.addEventListener('pointermove', ev => {
+        const i = cellAt(ev); hover = i; dirty = true;
+        if (digging && i >= 0) {
+            const lastI = digging[digging.length - 1];
+            // 补齐中间格，保证四连通
+            let x0 = lastI % W, y0 = (lastI / W) | 0; const x1 = i % W, y1 = (i / W) | 0;
+            while (x0 !== x1 || y0 !== y1) { if (Math.abs(x1 - x0) >= Math.abs(y1 - y0)) x0 += Math.sign(x1 - x0); else y0 += Math.sign(y1 - y0); const j = idx(x0, y0); if (!digging.includes(j)) digging.push(j); }
+            const tc = terrainRGB; for (const j of digging) { tc[j * 3] = 52; tc[j * 3 + 1] = 120; tc[j * 3 + 2] = 180; }
+        }
+        tipFor(i, ev);
+    });
+    const endDig = () => { if (digging) { City.userRiver(world, digging); digging = null; buildTerrain(); refreshPanels(); dirty = true; } };
+    view.addEventListener('pointerup', endDig); view.addEventListener('pointercancel', endDig);
+    view.addEventListener('pointerleave', () => { hover = -1; $('tip').style.display = 'none'; dirty = true; });
+
+    const HINTS = { look: '移动鼠标查看地块，点击聚落查看详情。', river: '按住拖动挖出一条河。河边土地更肥沃，但也会闹洪水。', ore: '点击放下一处矿脉。附近的聚落会去开矿、建工坊。', found: '点击空地，派一批移民去那里建村。' };
+    function hint(s) { $('toolHint').textContent = s; }
+    document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => {
+        tool = b.dataset.tool; document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x === b)); hint(HINTS[tool]);
+    });
+    $('bPlay').onclick = () => { playing = !playing; $('bPlay').textContent = playing ? '⏸ 暂停' : '▶ 继续'; };
+    $('speed').oninput = e => { speed = +e.target.value; $('sSpeed').textContent = speed + ' 年/秒'; };
+    $('bSeed').onclick = () => { const v = $('seed').value.trim(); start(v && v !== world.seed ? v : Math.random().toString(36).slice(2, 8)); };
+    $('seed').onkeydown = e => { if (e.key === 'Enter') start($('seed').value.trim() || 'city'); };
+    $('bToday').onclick = () => start('day-' + today());
+    $('chron').querySelector('h3').onclick = () => { const c = $('chron'); c.classList.toggle('closed'); $('chronToggle').textContent = c.classList.contains('closed') ? '展开' : '收起'; };
+    window.addEventListener('resize', resize);
+
+    // ---------- 主循环 ----------
+    let panelT = 0;
+    function frame(now) {
+        const dt = Math.min(0.25, (now - last) / 1000); last = now;
+        if (playing && !digging) {
+            acc += dt * speed;
+            let n = 0;
+            while (acc >= 1 && n < 10) { City.step(world); acc -= 1; n++; dirty = true; }
+            if (n === 10) acc = 0;
+        }
+        if (dirty) { draw(); dirty = false; }
+        if (now - panelT > 400) { panelT = now; refreshPanels(); }
+        requestAnimationFrame(frame);
+    }
+    const q = new URLSearchParams(location.search).get('seed');
+    resize();
+    start(q || 'day-' + today());
+    requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
